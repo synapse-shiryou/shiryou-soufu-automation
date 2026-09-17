@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
     file_path       TEXT NOT NULL,
     spreadsheet_url TEXT NOT NULL,  -- アップロード画面で毎回指定されるスプレッドシートURL
     kakudo          TEXT,  -- 確度: 高/中/低
+    chakuden_saki   TEXT,  -- 着電先: 受付/担当者/代表
     staff_name      TEXT,  -- 実施した架電担当者(staff_members.nameを選択)
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
     result_text     TEXT,
@@ -127,6 +128,7 @@ ALTER TABLE audio_jobs DROP COLUMN IF EXISTS client_code;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS kakudo TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS staff_name TEXT;
+ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS chakuden_saki TEXT;
 DROP TABLE IF EXISTS client_sheets;
 """
 
@@ -212,6 +214,7 @@ REF_FIRSTNAME_HEADER_CANDIDATES = ["名"]
 REF_EMAIL_HEADER_CANDIDATES = ["メールアドレス"]
 
 KAKUDO_CHOICES = ["高", "中", "低"]
+CHAKUDEN_SAKI_CHOICES = ["受付", "担当者", "代表"]
 
 
 def parse_spreadsheet_url(url: str) -> tuple[str, int | None]:
@@ -434,7 +437,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name, uploader
+                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name, uploader, chakuden_saki
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -454,7 +457,7 @@ def process_pending_jobs():
     for row in rows:
         _process_single_job(
             row.id, row.phone_number, row.file_path, row.spreadsheet_url,
-            row.kakudo, row.staff_name, row.uploader,
+            row.kakudo, row.staff_name, row.uploader, row.chakuden_saki,
         )
 
 
@@ -466,6 +469,7 @@ def _process_single_job(
     kakudo: str | None = None,
     staff_name: str | None = None,
     uploader: str | None = None,
+    chakuden_saki: str | None = None,
 ):
     summary_text = None
     gemini_error = None
@@ -508,13 +512,22 @@ def _process_single_job(
             else:
                 logger.warning("job=%d 確度列が見つからないため確度の書き込みをスキップしました", job_id)
 
-        if uploader:
+        if uploader or chakuden_saki:
             header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
-            lastname_col = _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES)
-            if lastname_col is not None:
-                write_with_retry(ws, row_num, lastname_col, uploader)
-            else:
-                logger.warning("job=%d 姓列が見つからないためお名前の書き込みをスキップしました", job_id)
+
+            if uploader:
+                lastname_col = _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES)
+                if lastname_col is not None:
+                    write_with_retry(ws, row_num, lastname_col, uploader)
+                else:
+                    logger.warning("job=%d 姓列が見つからないためお名前の書き込みをスキップしました", job_id)
+
+            if chakuden_saki:
+                contact_col = _find_column(header_values, TARGET_CONTACT_HEADER_CANDIDATES)
+                if contact_col is not None:
+                    write_with_retry(ws, row_num, contact_col, chakuden_saki)
+                else:
+                    logger.warning("job=%d 着電先列が見つからないため書き込みをスキップしました", job_id)
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
@@ -640,6 +653,7 @@ async def handle_upload(
     uploader: str = Form(""),
     spreadsheet_url: str = Form(...),
     kakudo: str = Form(...),
+    chakuden_saki: str = Form(...),
     staff_name: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
@@ -648,6 +662,9 @@ async def handle_upload(
 
     if kakudo not in KAKUDO_CHOICES:
         raise HTTPException(status_code=400, detail=f"確度は{KAKUDO_CHOICES}のいずれかを選択してください")
+
+    if chakuden_saki not in CHAKUDEN_SAKI_CHOICES:
+        raise HTTPException(status_code=400, detail=f"着電先は{CHAKUDEN_SAKI_CHOICES}のいずれかを選択してください")
 
     if staff_name not in _get_staff_names():
         raise HTTPException(status_code=400, detail="実施者を選択してください")
@@ -661,8 +678,8 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (phone_number, uploader, file_path, spreadsheet_url, kakudo, staff_name)
-                VALUES (:phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :staff_name)
+                INSERT INTO audio_jobs (phone_number, uploader, file_path, spreadsheet_url, kakudo, chakuden_saki, staff_name)
+                VALUES (:phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :chakuden_saki, :staff_name)
                 """
             ),
             {
@@ -671,6 +688,7 @@ async def handle_upload(
                 "file_path": str(saved_path),
                 "spreadsheet_url": spreadsheet_url.strip(),
                 "kakudo": kakudo,
+                "chakuden_saki": chakuden_saki,
                 "staff_name": staff_name,
             },
         )
