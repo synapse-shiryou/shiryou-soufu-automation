@@ -55,7 +55,7 @@ logger = logging.getLogger("shiryou_soufu_multi")
 # ------------------------------------------------------------------
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_TRANSCRIBE_MODEL = "whisper-large-v3"
-GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+GROQ_CHAT_MODEL = "openai/gpt-oss-120b"
 DATABASE_URL = os.environ["DATABASE_URL"]
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/shiryou_soufu_uploads"))
