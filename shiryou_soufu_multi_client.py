@@ -55,7 +55,7 @@ logger = logging.getLogger("shiryou_soufu_multi")
 # 設定
 # ------------------------------------------------------------------
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 DATABASE_URL = os.environ["DATABASE_URL"]
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/shiryou_soufu_uploads"))
