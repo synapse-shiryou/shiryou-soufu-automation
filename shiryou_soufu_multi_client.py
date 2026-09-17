@@ -200,7 +200,7 @@ TARGET_URL_HEADER_CANDIDATES = ["URL", "HP", "ホームページ"]
 TARGET_CONTACT_HEADER_CANDIDATES = ["着電先", "役職"]
 TARGET_LASTNAME_HEADER_CANDIDATES = ["姓"]
 TARGET_FIRSTNAME_HEADER_CANDIDATES = ["名"]
-TARGET_EMAIL_HEADER_CANDIDATES = ["メールアドレス", "メール"]
+TARGET_EMAIL_HEADER_CANDIDATES = ["メールアドレス"]
 TARGET_SEND_DATE_HEADER_CANDIDATES = ["送付日"]
 
 # 「営業リスト」タブ側で、上記項目を引くための候補列
@@ -209,7 +209,7 @@ REF_URL_HEADER_CANDIDATES = ["HP", "URL", "ホームページ"]
 REF_CONTACT_HEADER_CANDIDATES = ["着電先", "役職"]
 REF_LASTNAME_HEADER_CANDIDATES = ["姓"]
 REF_FIRSTNAME_HEADER_CANDIDATES = ["名"]
-REF_EMAIL_HEADER_CANDIDATES = ["メールアドレス", "メール"]
+REF_EMAIL_HEADER_CANDIDATES = ["メールアドレス"]
 
 KAKUDO_CHOICES = ["高", "中", "低"]
 
@@ -384,10 +384,24 @@ def lookup_reference_row(ref_ws, phone_number: str) -> dict | None:
     }
 
 
+def _find_next_empty_row(ws) -> int:
+    """シート全体を見て、どの列にもデータが無い最初の行番号を返す。
+
+    A列など特定の列だけで判定すると、その列だけ空欄の実データ行を
+    「空き行」と誤認識して上書きしてしまう事故につながるため、
+    行全体(get_all_values)でデータの有無を判定する。
+    """
+    all_values = ws.get_all_values()
+    for i in range(len(all_values) - 1, -1, -1):
+        if any(cell.strip() for cell in all_values[i]):
+            return i + 2
+    return 2
+
+
 def append_row_from_reference(ws, phone_col: int, ref_data: dict) -> int:
     """営業リストから引いた情報をもとに、資料送付タブへ新規行を追加して行番号を返す。"""
     header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
-    next_row = len(ws.col_values(1)) + 1
+    next_row = _find_next_empty_row(ws)
 
     field_to_col = {
         "company": _find_column(header_values, TARGET_COMPANY_HEADER_CANDIDATES),
