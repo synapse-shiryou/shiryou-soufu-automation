@@ -64,6 +64,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Slackワークフロー「資料送付報告_v2」のWebhookトリガーURL。
 # 書き込み成功時に、案件名とスプレッドシートURLを渡して起動する。未設定なら何もしない。
 SLACK_WORKFLOW_WEBHOOK_URL = os.environ.get("SLACK_WORKFLOW_WEBHOOK_URL")
+SLACK_WORKFLOW_WEBHOOK_URL_APO = os.environ.get("SLACK_WORKFLOW_WEBHOOK_URL_APO")
 
 # 実施者一覧を毎日自動同期するためのSlack Bot Token(channels:read, users:read)。
 # 未設定の場合は同期処理自体をスキップする(手動登録のみで運用可能)。
@@ -638,6 +639,7 @@ def _process_single_job(
         official_deal_name=ws.spreadsheet.title,
         spreadsheet_url=spreadsheet_url,
         uploader_mention=uploader_mention,
+        report_type=report_type,
     )
 
 
@@ -672,14 +674,21 @@ def notify_slack_failure(job_id, phone_number):
     logger.info("[Slack失敗通知] phone=%s job=%d", phone_number, job_id)
 
 
-def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str, uploader_mention: str = ""):
-    """Slackワークフロー「資料送付報告_v2」のWebhookトリガーを起動する。"""
-    if not SLACK_WORKFLOW_WEBHOOK_URL:
-        logger.info("[Slackワークフロー] SLACK_WORKFLOW_WEBHOOK_URL未設定のためスキップ")
+def trigger_shiryou_soufu_workflow(
+    official_deal_name: str, spreadsheet_url: str, uploader_mention: str = "",
+    report_type: str = "資料送付",
+):
+    """Slackワークフロー(資料送付報告_v2 / アポ獲得報告_v2_Webhook)のWebhookトリガーを起動する。
+
+    report_typeに応じて宛先のWebhookを切り替える。
+    """
+    webhook_url = SLACK_WORKFLOW_WEBHOOK_URL_APO if report_type == "アポ獲得" else SLACK_WORKFLOW_WEBHOOK_URL
+    if not webhook_url:
+        logger.info("[Slackワークフロー] report_type=%s 用のWebhook URLが未設定のためスキップ", report_type)
         return
     try:
         response = requests.post(
-            SLACK_WORKFLOW_WEBHOOK_URL,
+            webhook_url,
             json={
                 "official_deal_name": official_deal_name,
                 "spreadsheet_url": spreadsheet_url,
@@ -689,8 +698,8 @@ def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str
         )
         response.raise_for_status()
         logger.info(
-            "[Slackワークフロー] 起動成功 official_deal_name=%s status=%s",
-            official_deal_name, response.status_code,
+            "[Slackワークフロー] 起動成功 report_type=%s official_deal_name=%s status=%s",
+            report_type, official_deal_name, response.status_code,
         )
     except requests.RequestException:
         logger.exception("[Slackワークフロー] 起動失敗 official_deal_name=%s", official_deal_name)
