@@ -186,11 +186,10 @@ TAB_NAME_KEYWORD = "資料送付"
 
 # ヘッダー行から列を特定するための候補文字列(複数書けば表記ゆれに対応できる)
 PHONE_HEADER_CANDIDATES = ["電話番号", "TEL", "電話"]
-DETAIL_HEADER_CANDIDATES = ["詳細", "商談結果詳細記述", "架電メモ", "資料送付報告"]
+DETAIL_HEADER_CANDIDATES = ["詳細", "商談結果詳細記述", "架電メモ", "資料送付報告", "ヒアリング内容"]
+KAKUDO_HEADER_CANDIDATES = ["確度", "見込み"]
 HEADER_SEARCH_ROWS = 3  # ヘッダーが1行目にない場合に備えて数行だけ探す
 
-# 確度の書き込み先は固定でM列
-KAKUDO_COLUMN = 13  # A=1, ..., M=13
 KAKUDO_CHOICES = ["高", "中", "低"]
 
 
@@ -241,10 +240,15 @@ def resolve_worksheet(spreadsheet_url: str):
     raise RuntimeError(f"「{TAB_NAME_KEYWORD}」を含むタブが見つかりません: {spreadsheet_id}")
 
 
-def find_header_columns(ws) -> tuple[int, int]:
-    """ヘッダー行を数行スキャンして、電話番号列・詳細列の列番号を自動特定する"""
+def find_header_columns(ws) -> tuple[int, int, int | None]:
+    """ヘッダー行を数行スキャンして、電話番号列・詳細列・確度列の列番号を自動特定する
+
+    確度列は無くても書き込み自体は継続できるので None を許容する。
+    同じ列が複数の役割に重複マッチした場合は、後勝ちで上書きされる事故を防ぐため
+    それぞれ別列として検出できたものだけを採用する。
+    """
     all_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
-    phone_col = detail_col = None
+    phone_col = detail_col = kakudo_col = None
 
     for row_values in all_values:
         for idx, cell_value in enumerate(row_values, start=1):
@@ -252,7 +256,9 @@ def find_header_columns(ws) -> tuple[int, int]:
                 phone_col = idx
             if detail_col is None and any(c in cell_value for c in DETAIL_HEADER_CANDIDATES):
                 detail_col = idx
-        if phone_col and detail_col:
+            if kakudo_col is None and any(c in cell_value for c in KAKUDO_HEADER_CANDIDATES):
+                kakudo_col = idx
+        if phone_col and detail_col and kakudo_col:
             break
 
     if phone_col is None or detail_col is None:
@@ -260,7 +266,12 @@ def find_header_columns(ws) -> tuple[int, int]:
             f"ヘッダーから列を特定できませんでした(phone_col={phone_col}, detail_col={detail_col})。"
             "見出し文字列の候補(PHONE_HEADER_CANDIDATES/DETAIL_HEADER_CANDIDATES)を見直してください。"
         )
-    return phone_col, detail_col
+    if kakudo_col is not None and kakudo_col == detail_col:
+        logger.warning(
+            "確度列が詳細列と同じ列(%d)に一致したため、確度列は未検出として扱います", kakudo_col
+        )
+        kakudo_col = None
+    return phone_col, detail_col, kakudo_col
 
 
 def find_row_by_phone(ws, col_phone: int, phone_number: str) -> int | None:
@@ -338,7 +349,7 @@ def _process_single_job(
 
     try:
         ws = resolve_worksheet(spreadsheet_url)
-        phone_col, detail_col = find_header_columns(ws)
+        phone_col, detail_col, kakudo_col = find_header_columns(ws)
         row_num = find_row_by_phone(ws, phone_col, phone_number)
 
         if row_num is None:
@@ -348,7 +359,10 @@ def _process_single_job(
 
         write_with_retry(ws, row_num, detail_col, summary_text)
         if kakudo:
-            write_with_retry(ws, row_num, KAKUDO_COLUMN, kakudo)
+            if kakudo_col is not None:
+                write_with_retry(ws, row_num, kakudo_col, kakudo)
+            else:
+                logger.warning("job=%d 確度列が見つからないため確度の書き込みをスキップしました", job_id)
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
