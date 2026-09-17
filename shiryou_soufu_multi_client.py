@@ -43,6 +43,7 @@ from datetime import datetime
 
 import google.generativeai as genai
 import gspread
+import requests
 from google.oauth2.service_account import Credentials
 from fastapi import FastAPI, APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
@@ -62,6 +63,10 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/shiryou_soufu_uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Slackワークフロー「資料送付報告_v2」のWebhookトリガーURL。
+# 書き込み成功時に、案件名とスプレッドシートURLを渡して起動する。未設定なら何もしない。
+SLACK_WORKFLOW_WEBHOOK_URL = os.environ.get("SLACK_WORKFLOW_WEBHOOK_URL")
 
 # 40名が同時に投げても詰まらないよう、ワーカーが一度に処理する件数を絞る。
 # Geminiの契約プラン(RPM上限)に合わせて調整してください。
@@ -351,6 +356,7 @@ def _process_single_job(
 
     _update_job(job_id, "done", result_text=summary_text)
     notify_slack_success(job_id, client.display_name, row_num, summary_text)
+    trigger_shiryou_soufu_workflow(official_deal_name=ws.spreadsheet.title, spreadsheet_url=spreadsheet_url)
 
 
 def _update_job(job_id: int, status: str, result_text: str | None = None, error_message: str | None = None):
@@ -381,6 +387,22 @@ def notify_slack_no_match(job_id, client_name, phone_number, summary_text):
 
 def notify_slack_failure(job_id, client_code, phone_number):
     logger.info("[Slack失敗通知] client=%s phone=%s job=%d", client_code, phone_number, job_id)
+
+
+def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str):
+    """Slackワークフロー「資料送付報告_v2」のWebhookトリガーを起動する。"""
+    if not SLACK_WORKFLOW_WEBHOOK_URL:
+        logger.info("[Slackワークフロー] SLACK_WORKFLOW_WEBHOOK_URL未設定のためスキップ")
+        return
+    try:
+        response = requests.post(
+            SLACK_WORKFLOW_WEBHOOK_URL,
+            json={"official_deal_name": official_deal_name, "spreadsheet_url": spreadsheet_url},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.exception("[Slackワークフロー] 起動失敗 official_deal_name=%s", official_deal_name)
 
 
 # ------------------------------------------------------------------
