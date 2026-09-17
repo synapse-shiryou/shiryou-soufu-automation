@@ -582,7 +582,8 @@ def _update_job(job_id: int, status: str, result_text: str | None = None, error_
 # Slack通知 (既存のSlack連携関数に差し替えてください)
 # ------------------------------------------------------------------
 def notify_slack_success(job_id, row_num, summary_text):
-    logger.info("[Slack成功通知] %d行目更新 job=%d\n%s", row_num, job_id, summary_text[:80])
+    preview = summary_text[:80] if summary_text else "(Gemini処理失敗のため要約なし)"
+    logger.info("[Slack成功通知] %d行目更新 job=%d\n%s", row_num, job_id, preview)
 
 
 def notify_slack_no_match(job_id, phone_number, summary_text):
