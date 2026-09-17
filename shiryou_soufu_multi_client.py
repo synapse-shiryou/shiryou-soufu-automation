@@ -433,7 +433,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name
+                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name, uploader
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -451,7 +451,10 @@ def process_pending_jobs():
             )
 
     for row in rows:
-        _process_single_job(row.id, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo, row.staff_name)
+        _process_single_job(
+            row.id, row.phone_number, row.file_path, row.spreadsheet_url,
+            row.kakudo, row.staff_name, row.uploader,
+        )
 
 
 def _process_single_job(
@@ -461,6 +464,7 @@ def _process_single_job(
     spreadsheet_url: str,
     kakudo: str | None = None,
     staff_name: str | None = None,
+    uploader: str | None = None,
 ):
     try:
         summary_text = transcribe_and_summarize(file_path)
@@ -499,6 +503,14 @@ def _process_single_job(
                 write_with_retry(ws, row_num, kakudo_col, kakudo)
             else:
                 logger.warning("job=%d 確度列が見つからないため確度の書き込みをスキップしました", job_id)
+
+        if uploader:
+            header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
+            lastname_col = _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES, exact=True)
+            if lastname_col is not None:
+                write_with_retry(ws, row_num, lastname_col, uploader)
+            else:
+                logger.warning("job=%d 姓列が見つからないためお名前の書き込みをスキップしました", job_id)
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
