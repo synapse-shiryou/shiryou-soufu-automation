@@ -415,6 +415,10 @@ def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str
             timeout=10,
         )
         response.raise_for_status()
+        logger.info(
+            "[Slackワークフロー] 起動成功 official_deal_name=%s status=%s",
+            official_deal_name, response.status_code,
+        )
     except requests.RequestException:
         logger.exception("[Slackワークフロー] 起動失敗 official_deal_name=%s", official_deal_name)
 
