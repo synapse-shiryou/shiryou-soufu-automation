@@ -1,13 +1,13 @@
 """
-資料送付報告 自動化 - マルチクライアント / 非同期キュー版
+資料送付報告 自動化 - 単一URL / 非同期キュー版
 
 想定規模: 管理表(クライアント)約100件、利用者(架電担当)約40名
 
 設計方針:
 - アップロードは「受付」だけを同期で行い、即座にレスポンスを返す
   (Gemini処理・シート書き込みはバックグラウンドワーカーに任せる)
-- どのクライアントのどの管理表に書くかは、コードではなく
-  DBの client_sheets テーブルで管理する(新規クライアント追加は「URLを1件登録するだけ」)
+- クライアントの事前登録は行わない。どの管理表に書くかは、
+  アップロード画面でその都度貼り付けるスプレッドシートURLだけで決まる
 - タブ(gid)や列番号は固定値をDBに持たず、実行時に自動で見つける
   - gid付きURLならそのタブを直接開く。gidが無ければタブ名に「資料送付」を
     含むシートを自動検索する
@@ -16,21 +16,18 @@
 - ワーカーは PostgreSQL の SELECT ... FOR UPDATE SKIP LOCKED で
   ジョブを取り合うので、ワーカーを複数プロセス/複数台に増やしても安全
 - Gemini/Sheets 両APIのレート制限を考慮し、同時実行数を絞って処理する
-- 完了通知はWebページで待たせず、Slackに飛ばす想定(既存のSlack連携に接続)
+- 完了通知はWebページで待たせず、Slackワークフローに飛ばす
 
 必要パッケージ:
   pip install fastapi uvicorn python-multipart jinja2 sqlalchemy psycopg2-binary \
-              apscheduler google-generativeai gspread google-auth --break-system-packages
+              apscheduler google-generativeai gspread google-auth requests --break-system-packages
 
 このファイルと同じ階層に templates/upload_form.html を置いてください
 (Jinja2Templates(directory="templates") が参照します)。
 
 DB接続文字列は環境変数 DATABASE_URL (例: postgresql://user:pass@host:5432/dbname)
 
-新規ファイル(クライアント)の追加方法:
-  INSERT INTO client_sheets (client_code, display_name, spreadsheet_url)
-  VALUES ('acme', '株式会社Acme', 'https://docs.google.com/spreadsheets/d/xxxx/edit?gid=123#gid=123');
-  タブや列は上のURLから自動的に見つかるので、これだけで使えるようになります。
+アップロードURLは常に /shiryou-soufu/upload の1つだけです。
 """
 
 import os
@@ -104,19 +101,12 @@ PROMPT = """役割
 # DBスキーマ (初回起動時に作成)
 # ------------------------------------------------------------------
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS client_sheets (
-    client_code    TEXT PRIMARY KEY,
-    display_name   TEXT NOT NULL,
-    spreadsheet_url TEXT NOT NULL   -- 貼るだけでOK。gid付きでもタブ名検索でも可
-);
-
 CREATE TABLE IF NOT EXISTS audio_jobs (
     id              SERIAL PRIMARY KEY,
-    client_code     TEXT NOT NULL REFERENCES client_sheets(client_code),
     phone_number    TEXT NOT NULL,
     uploader        TEXT,
     file_path       TEXT NOT NULL,
-    spreadsheet_url TEXT,  -- アップロード画面で直接指定されたURL。指定が無ければclient_sheets側のURLを使う
+    spreadsheet_url TEXT NOT NULL,  -- アップロード画面で毎回指定されるスプレッドシートURL
     kakudo          TEXT,  -- 確度: 高/中/低
     staff_name      TEXT,  -- 実施した架電担当者(staff_members.nameを選択)
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
@@ -131,9 +121,13 @@ CREATE TABLE IF NOT EXISTS staff_members (
     slack_user_id  TEXT NOT NULL
 );
 
+-- 旧バージョン(クライアント事前登録制)からの移行
+ALTER TABLE audio_jobs DROP CONSTRAINT IF EXISTS audio_jobs_client_code_fkey;
+ALTER TABLE audio_jobs DROP COLUMN IF EXISTS client_code;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS kakudo TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS staff_name TEXT;
+DROP TABLE IF EXISTS client_sheets;
 """
 
 
@@ -288,7 +282,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, client_code, phone_number, file_path, spreadsheet_url, kakudo, staff_name
+                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -306,17 +300,14 @@ def process_pending_jobs():
             )
 
     for row in rows:
-        _process_single_job(
-            row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo, row.staff_name
-        )
+        _process_single_job(row.id, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo, row.staff_name)
 
 
 def _process_single_job(
     job_id: int,
-    client_code: str,
     phone_number: str,
     file_path: str,
-    spreadsheet_url_override: str | None = None,
+    spreadsheet_url: str,
     kakudo: str | None = None,
     staff_name: str | None = None,
 ):
@@ -325,25 +316,13 @@ def _process_single_job(
     except Exception as e:
         logger.exception("job=%d Gemini処理失敗", job_id)
         _update_job(job_id, "error", error_message=str(e))
-        notify_slack_failure(job_id, client_code, phone_number)
+        notify_slack_failure(job_id, phone_number)
         return
     finally:
         try:
             os.remove(file_path)
         except OSError:
             pass
-
-    with engine.begin() as conn:
-        client = conn.execute(
-            text("SELECT * FROM client_sheets WHERE client_code=:c"),
-            {"c": client_code},
-        ).fetchone()
-
-    if client is None:
-        _update_job(job_id, "error", error_message=f"未知のclient_code: {client_code}")
-        return
-
-    spreadsheet_url = spreadsheet_url_override or client.spreadsheet_url
 
     try:
         ws = resolve_worksheet(spreadsheet_url)
@@ -352,7 +331,7 @@ def _process_single_job(
 
         if row_num is None:
             _update_job(job_id, "no_match", result_text=summary_text)
-            notify_slack_no_match(job_id, client.display_name, phone_number, summary_text)
+            notify_slack_no_match(job_id, phone_number, summary_text)
             return
 
         write_with_retry(ws, row_num, detail_col, summary_text)
@@ -361,11 +340,11 @@ def _process_single_job(
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
-        notify_slack_failure(job_id, client_code, phone_number)
+        notify_slack_failure(job_id, phone_number)
         return
 
     _update_job(job_id, "done", result_text=summary_text)
-    notify_slack_success(job_id, client.display_name, row_num, summary_text)
+    notify_slack_success(job_id, row_num, summary_text)
 
     # Slack ワークフロー側で「表示名」形式のSlackユーザーID変数として解決させるため、
     # <@...>で囲まず生のユーザーIDを渡す。見つからない場合は入力名をそのまま渡す。
@@ -396,16 +375,16 @@ def _update_job(job_id: int, status: str, result_text: str | None = None, error_
 # ------------------------------------------------------------------
 # Slack通知 (既存のSlack連携関数に差し替えてください)
 # ------------------------------------------------------------------
-def notify_slack_success(job_id, client_name, row_num, summary_text):
-    logger.info("[Slack成功通知] %s %d行目更新 job=%d\n%s", client_name, row_num, job_id, summary_text[:80])
+def notify_slack_success(job_id, row_num, summary_text):
+    logger.info("[Slack成功通知] %d行目更新 job=%d\n%s", row_num, job_id, summary_text[:80])
 
 
-def notify_slack_no_match(job_id, client_name, phone_number, summary_text):
-    logger.info("[Slack要確認通知] %s 電話番号%s の行が見つかりません job=%d", client_name, phone_number, job_id)
+def notify_slack_no_match(job_id, phone_number, summary_text):
+    logger.info("[Slack要確認通知] 電話番号%s の行が見つかりません job=%d", phone_number, job_id)
 
 
-def notify_slack_failure(job_id, client_code, phone_number):
-    logger.info("[Slack失敗通知] client=%s phone=%s job=%d", client_code, phone_number, job_id)
+def notify_slack_failure(job_id, phone_number):
+    logger.info("[Slack失敗通知] phone=%s job=%d", phone_number, job_id)
 
 
 def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str, uploader_mention: str = ""):
@@ -450,25 +429,21 @@ def _get_staff_slack_user_id(staff_name: str) -> str | None:
     return row.slack_user_id if row else None
 
 
-@router.get("/{client_code}/upload", response_class=HTMLResponse)
-async def show_upload_form(request: Request, client_code: str):
-    client_name = _get_client_display_name(client_code)
+@router.get("/upload", response_class=HTMLResponse)
+async def show_upload_form(request: Request):
     return templates.TemplateResponse(
         request,
         "upload_form.html",
         {
-            "client_code": client_code,
-            "client_name": client_name,
             "result_status": None,
             "staff_members": _get_staff_names(),
         },
     )
 
 
-@router.post("/{client_code}/upload", response_class=HTMLResponse)
+@router.post("/upload", response_class=HTMLResponse)
 async def handle_upload(
     request: Request,
-    client_code: str,
     phone_number: str = Form(...),
     uploader: str = Form(""),
     spreadsheet_url: str = Form(...),
@@ -476,8 +451,6 @@ async def handle_upload(
     staff_name: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
-    client_name = _get_client_display_name(client_code)  # 存在しなければ404
-
     if not spreadsheet_url.strip():
         raise HTTPException(status_code=400, detail="スプレッドシートURLを入力してください")
 
@@ -496,16 +469,15 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url, kakudo, staff_name)
-                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :staff_name)
+                INSERT INTO audio_jobs (phone_number, uploader, file_path, spreadsheet_url, kakudo, staff_name)
+                VALUES (:phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :staff_name)
                 """
             ),
             {
-                "client_code": client_code,
                 "phone_number": phone_number,
                 "uploader": uploader,
                 "file_path": str(saved_path),
-                "spreadsheet_url": spreadsheet_url.strip() or None,
+                "spreadsheet_url": spreadsheet_url.strip(),
                 "kakudo": kakudo,
                 "staff_name": staff_name,
             },
@@ -515,23 +487,10 @@ async def handle_upload(
         request,
         "upload_form.html",
         {
-            "client_code": client_code,
-            "client_name": client_name,
             "result_status": "accepted",
             "staff_members": _get_staff_names(),
         },
     )
-
-
-def _get_client_display_name(client_code: str) -> str:
-    with engine.begin() as conn:
-        row = conn.execute(
-            text("SELECT display_name FROM client_sheets WHERE client_code=:c"),
-            {"c": client_code},
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"未登録のclient_code: {client_code}")
-    return row.display_name
 
 
 # ------------------------------------------------------------------

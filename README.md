@@ -1,7 +1,7 @@
-# 資料送付報告 自動化(マルチクライアント)
+# 資料送付報告 自動化
 
 営業架電の音声ファイルをアップロードすると、Gemini APIで文字起こし・要約を行い、
-クライアントごとのGoogleスプレッドシート(管理表)に自動で書き込むFastAPIアプリです。
+アップロード画面で指定したGoogleスプレッドシート(管理表)に自動で書き込むFastAPIアプリです。
 
 ## 構成
 
@@ -10,13 +10,28 @@
 ├── shiryou_soufu_multi_client.py   # FastAPIアプリ本体 + バックグラウンドワーカー
 ├── templates/
 │   └── upload_form.html            # 音声アップロードフォーム(Jinja2)
+├── admin_scripts/                  # 運用・移行用の補助スクリプト(README参照)
 ├── requirements.txt
 └── Procfile                        # Railway/Heroku用起動コマンド
 ```
 
+- アップロードURLは常に **`/shiryou-soufu/upload`** の1つだけ。クライアントの事前登録は不要
 - アップロードは受付のみ同期処理し、即座にレスポンスを返す
 - Gemini処理・シート書き込みはAPScheduler製バックグラウンドワーカーが15秒間隔で処理
-- どのクライアントのどの管理表に書き込むかは `client_sheets` テーブルで管理(コード変更不要)
+- どのスプレッドシートに書き込むかは、アップロード画面で毎回貼り付けるURLだけで決まる
+
+## アップロードフォームの入力項目
+
+| 項目 | 必須 | 説明 |
+|---|---|---|
+| 電話番号 | ○ | 管理表内の行を特定するためのキー |
+| お名前 | 任意 | 顧客側の名前(架電担当者ではない) |
+| スプレッドシートURL | ○ | 書き込み先の管理表URL。`gid` 付きならそのタブを直接使用、無ければタブ名に「資料送付」を含むシートを自動検索する |
+| 確度 | ○ | 高 / 中 / 低 から選択。書き込み先のM列に反映される |
+| 実施者 | ○ | 架電担当者本人を `staff_members` テーブルの一覧から選択。Slack通知の実施者表示に使う |
+| 架電音声ファイル | ○ | Geminiが文字起こし・要約する音声 |
+
+列(電話番号列・詳細列)はヘッダー行の文字列から自動特定されるため、シートごとの個別設定は不要です。
 
 ## 必要な環境変数
 
@@ -27,8 +42,10 @@
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | ○(Railway等) | Google Sheets APIサービスアカウントの秘密鍵JSONの中身をそのまま文字列で設定(ファイルアップロードが困難な環境向け) |
 | `GOOGLE_SERVICE_ACCOUNT_FILE` | 任意 | ローカル実行時、JSONファイルのパスで認証する場合に使用(デフォルト: `service_account.json`)。`GOOGLE_SERVICE_ACCOUNT_JSON` が設定されている場合はそちらが優先される |
 | `UPLOAD_DIR` | 任意 | 音声一時保存先ディレクトリ(デフォルト: `/tmp/shiryou_soufu_uploads`) |
+| `SLACK_WORKFLOW_WEBHOOK_URL` | 任意 | 書き込み成功時に起動するSlackワークフロー(資料送付報告_v2)のWebhook URL。未設定なら通知はログ出力のみ |
 
-サービスアカウントには、書き込み対象のGoogleスプレッドシートを「編集者」として共有しておく必要があります。
+サービスアカウントには、書き込み対象の各Googleスプレッドシートを「編集者」として共有しておく必要があります
+(100件超のシートに一括で共有するには `admin_scripts/bulk_share_service_account.py` を参照)。
 
 ## ローカル起動方法
 
@@ -44,9 +61,10 @@ export GOOGLE_SERVICE_ACCOUNT_FILE="service_account.json"   # またはGOOGLE_SE
 uvicorn shiryou_soufu_multi_client:app --reload
 ```
 
-起動後、`http://127.0.0.1:8000/shiryou-soufu/{client_code}/upload` にアクセスするとアップロードフォームが表示されます(`client_code` は事前に `client_sheets` テーブルへ登録が必要)。
+起動後、`http://127.0.0.1:8000/shiryou-soufu/upload` にアクセスするとアップロードフォームが表示されます。
 
-初回起動時に `client_sheets` / `audio_jobs` テーブルが自動作成されます。
+初回起動時に `audio_jobs` / `staff_members` テーブルが自動作成されます
+(旧バージョンの `client_sheets` テーブル・`audio_jobs.client_code` 列は自動的に削除されます)。
 
 ## Railwayへのデプロイ手順
 
@@ -57,33 +75,31 @@ uvicorn shiryou_soufu_multi_client:app --reload
    - プロジェクト内で `New` → `Database` → `Add PostgreSQL` を選択
    - 追加すると `DATABASE_URL` が自動生成され、同プロジェクト内の他サービスから参照可能になる
 3. **環境変数設定**
-   - デプロイしたWebサービスの `Variables` タブで以下を設定
-     - `GEMINI_API_KEY`
-     - `DATABASE_URL` (PostgreSQLサービスの変数を参照する場合は `${{Postgres.DATABASE_URL}}` のようにReference可能)
-     - `GOOGLE_SERVICE_ACCOUNT_JSON`(サービスアカウントJSONファイルの中身をそのまま貼り付け)
+   - デプロイしたWebサービスの `Variables` タブで上記の環境変数を設定
 4. **Generate Domain**
    - Webサービスの `Settings` → `Networking` → `Generate Domain` で公開URLを発行
-   - 発行されたURL + `/shiryou-soufu/{client_code}/upload` を各クライアント担当者に共有
+   - 発行されたURL + `/shiryou-soufu/upload` を架電担当者に共有
 
-## 新規クライアントの登録方法
+## 実施者(架電担当者)の管理
 
-Railwayの PostgreSQL サービスに接続し(`Data` タブの `Query` から、またはローカルから `psql $DATABASE_URL` で接続)、`client_sheets` テーブルに1行INSERTするだけで新しいクライアントを追加できます。
+`staff_members` テーブルに `name`(表示名)と `slack_user_id` を登録しておくと、
+アップロードフォームの「実施者」プルダウンに表示され、Slack通知に実施者名が載ります。
 
 ```sql
-INSERT INTO client_sheets (client_code, display_name, spreadsheet_url)
-VALUES (
-  'acme',
-  '株式会社Acme',
-  'https://docs.google.com/spreadsheets/d/xxxxxxxxxxxxxxxx/edit?gid=123456#gid=123456'
-);
+INSERT INTO staff_members (name, slack_user_id)
+VALUES ('山田太郎', 'U0XXXXXXXXX')
+ON CONFLICT (name) DO UPDATE SET slack_user_id = EXCLUDED.slack_user_id;
 ```
 
-- `client_code`: URLパスに使う識別子(例: `acme` → `/shiryou-soufu/acme/upload`)。半角英数字推奨
-- `display_name`: フォームやSlack通知に表示される名前
-- `spreadsheet_url`: 管理表のスプレッドシートURL。`gid` 付きURLをコピペすればそのタブが直接使われる。`gid` が無い場合はタブ名に「資料送付」を含むシートを自動検索する
-- 列(電話番号列・詳細列)はヘッダー行の文字列から自動特定されるため、個別設定は不要
-- サービスアカウントのメールアドレスを、対象スプレッドシートの共有設定に「編集者」として追加しておくこと
+`slack_user_id` はSlackのプロフィールやSlack APIの `users.list` / `conversations.members` で確認できます
+(実名・メールアドレス等の個人情報を含むCSVやSQLはリポジトリにコミットしないでください)。
 
 ## Slack通知の接続
 
-`notify_slack_success` / `notify_slack_no_match` / `notify_slack_failure` (`shiryou_soufu_multi_client.py` 内)は現状ログ出力のみのスタブです。既存のSlack連携がある場合はこの3関数の中身を差し替えてください。
+- `notify_slack_success` / `notify_slack_no_match` / `notify_slack_failure` はログ出力のみのスタブです。既存のSlack連携がある場合はこの3関数の中身を差し替えてください。
+- `trigger_shiryou_soufu_workflow` は、書き込み成功時にSlackワークフロー「資料送付報告_v2」をWebhook経由で起動します(`official_deal_name`=スプレッドシートのタイトル、`spreadsheet_url`、`uploader_mention`=実施者の表示名を渡す)。Slack側のWebhookトリガーの変数名・データタイプ(Slack ユーザー ID / 表示名)と一致させる必要があります。
+
+## 管理用スクリプト (admin_scripts/)
+
+- `bulk_share_service_account.py`: 指定したGoogleアカウントがアクセスできる全スプレッドシートのうち、タブ名に「資料送付」を含むものを検出し、サービスアカウントを編集者として一括共有する。実行方法はファイル内のdocstringを参照。
+- 実名・メールアドレス・Slack IDなど個人情報を含む生成物(`staff_members_raw.txt`, `insert_staff_members.sql` 等)は `.gitignore` により非公開のまま管理すること。

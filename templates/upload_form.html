@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ client_name }} - 架電音声アップロード</title>
+<title>資料送付報告 - 架電音声アップロード</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -206,11 +206,11 @@
 </head>
 <body>
 <main>
-  <p class="eyebrow">{{ client_name }}</p>
+  <p class="eyebrow">資料送付報告</p>
   <h1>架電音声から資料送付報告を作成</h1>
 
   <div class="panel">
-    <form action="/shiryou-soufu/{{ client_code }}/upload" method="post" enctype="multipart/form-data" id="upload-form">
+    <form action="/shiryou-soufu/upload" method="post" enctype="multipart/form-data" id="upload-form">
       <label for="phone_number">電話番号</label>
       <input type="text" id="phone_number" name="phone_number" placeholder="06-6438-8191" required>
 
