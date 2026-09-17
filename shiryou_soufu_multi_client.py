@@ -36,7 +36,7 @@ import time
 import uuid
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 import google.generativeai as genai
 import gspread
@@ -184,11 +184,32 @@ def get_gspread_client():
 # タブ名の自動検索キーワード(この文字を含むタブを「資料送付管理表」とみなす)
 TAB_NAME_KEYWORD = "資料送付"
 
+# 電話番号が「資料送付」タブに無かった場合に参照する、全リード一覧タブの検索キーワード
+REFERENCE_TAB_KEYWORD = "営業リスト"
+REFERENCE_TAB_EXCLUDE_KEYWORDS = ["NG"]  # 「営業NGリスト」などは除外
+
 # ヘッダー行から列を特定するための候補文字列(複数書けば表記ゆれに対応できる)
 PHONE_HEADER_CANDIDATES = ["電話番号", "TEL", "電話"]
 DETAIL_HEADER_CANDIDATES = ["詳細", "商談結果詳細記述", "架電メモ", "資料送付報告", "ヒアリング内容"]
 KAKUDO_HEADER_CANDIDATES = ["確度", "見込み"]
 HEADER_SEARCH_ROWS = 3  # ヘッダーが1行目にない場合に備えて数行だけ探す
+
+# 「資料送付」タブに新規行を追加する際に埋める項目の候補列(無ければその項目はスキップされる)
+TARGET_COMPANY_HEADER_CANDIDATES = ["会社名", "企業名"]
+TARGET_URL_HEADER_CANDIDATES = ["URL", "HP", "ホームページ"]
+TARGET_CONTACT_HEADER_CANDIDATES = ["着電先", "役職"]
+TARGET_LASTNAME_HEADER_CANDIDATES = ["姓"]
+TARGET_FIRSTNAME_HEADER_CANDIDATES = ["名"]
+TARGET_EMAIL_HEADER_CANDIDATES = ["メールアドレス", "メール"]
+TARGET_SEND_DATE_HEADER_CANDIDATES = ["送付日"]
+
+# 「営業リスト」タブ側で、上記項目を引くための候補列
+REF_COMPANY_HEADER_CANDIDATES = ["企業名", "会社名"]
+REF_URL_HEADER_CANDIDATES = ["HP", "URL", "ホームページ"]
+REF_CONTACT_HEADER_CANDIDATES = ["着電先", "役職"]
+REF_LASTNAME_HEADER_CANDIDATES = ["姓"]
+REF_FIRSTNAME_HEADER_CANDIDATES = ["名"]
+REF_EMAIL_HEADER_CANDIDATES = ["メールアドレス", "メール"]
 
 KAKUDO_CHOICES = ["高", "中", "低"]
 
@@ -297,6 +318,99 @@ def write_with_retry(ws, row: int, col: int, text_value: str, max_retries: int =
     raise RuntimeError("Sheets APIへの書き込みが規定回数失敗しました")
 
 
+def _find_column(all_values: list[list[str]], candidates: list[str], exact: bool = False) -> int | None:
+    """ヘッダー行群から候補文字列に一致する最初の列番号を返す。
+
+    exact=True の場合はセルの中身が候補文字列と完全一致した場合のみマッチする
+    (「姓」「名」のような1文字の候補は部分一致だと別の見出しに誤爆するため)。
+    """
+    for row_values in all_values:
+        for idx, cell_value in enumerate(row_values, start=1):
+            cell = cell_value.strip()
+            if exact:
+                if cell in candidates:
+                    return idx
+            else:
+                if any(c in cell_value for c in candidates):
+                    return idx
+    return None
+
+
+def find_reference_worksheet(sh):
+    """「資料送付」タブに電話番号が無かった場合に参照する、全リード一覧タブを探す。
+
+    「営業NGリスト」等は REFERENCE_TAB_EXCLUDE_KEYWORDS で除外し、
+    完全一致するタブがあればそれを優先、無ければタイトルが最短のものを採用する。
+    """
+    candidates = [
+        ws for ws in sh.worksheets()
+        if REFERENCE_TAB_KEYWORD in ws.title
+        and not any(ex in ws.title for ex in REFERENCE_TAB_EXCLUDE_KEYWORDS)
+    ]
+    if not candidates:
+        return None
+    for ws in candidates:
+        if ws.title == REFERENCE_TAB_KEYWORD:
+            return ws
+    return min(candidates, key=lambda w: len(w.title))
+
+
+def lookup_reference_row(ref_ws, phone_number: str) -> dict | None:
+    """営業リストタブを電話番号で検索し、資料送付タブへコピーする情報を返す。見つからなければNone。"""
+    header_values = ref_ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
+    ref_phone_col = _find_column(header_values, PHONE_HEADER_CANDIDATES)
+    if ref_phone_col is None:
+        return None
+
+    row_num = find_row_by_phone(ref_ws, ref_phone_col, phone_number)
+    if row_num is None:
+        return None
+
+    row_values = ref_ws.row_values(row_num)
+
+    def get(col_idx: int | None) -> str:
+        if col_idx is None or col_idx > len(row_values):
+            return ""
+        return row_values[col_idx - 1]
+
+    return {
+        "company": get(_find_column(header_values, REF_COMPANY_HEADER_CANDIDATES)),
+        "url": get(_find_column(header_values, REF_URL_HEADER_CANDIDATES)),
+        "contact": get(_find_column(header_values, REF_CONTACT_HEADER_CANDIDATES)),
+        "lastname": get(_find_column(header_values, REF_LASTNAME_HEADER_CANDIDATES, exact=True)),
+        "firstname": get(_find_column(header_values, REF_FIRSTNAME_HEADER_CANDIDATES, exact=True)),
+        "email": get(_find_column(header_values, REF_EMAIL_HEADER_CANDIDATES)),
+        "phone": get(ref_phone_col),
+    }
+
+
+def append_row_from_reference(ws, phone_col: int, ref_data: dict) -> int:
+    """営業リストから引いた情報をもとに、資料送付タブへ新規行を追加して行番号を返す。"""
+    header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
+    next_row = len(ws.col_values(1)) + 1
+
+    field_to_col = {
+        "company": _find_column(header_values, TARGET_COMPANY_HEADER_CANDIDATES),
+        "url": _find_column(header_values, TARGET_URL_HEADER_CANDIDATES),
+        "contact": _find_column(header_values, TARGET_CONTACT_HEADER_CANDIDATES),
+        "lastname": _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES, exact=True),
+        "firstname": _find_column(header_values, TARGET_FIRSTNAME_HEADER_CANDIDATES, exact=True),
+        "email": _find_column(header_values, TARGET_EMAIL_HEADER_CANDIDATES),
+    }
+    for field, col in field_to_col.items():
+        value = ref_data.get(field, "")
+        if col is not None and value:
+            write_with_retry(ws, next_row, col, value)
+
+    send_date_col = _find_column(header_values, TARGET_SEND_DATE_HEADER_CANDIDATES)
+    if send_date_col is not None:
+        write_with_retry(ws, next_row, send_date_col, date.today().strftime("%Y/%m/%d"))
+
+    write_with_retry(ws, next_row, phone_col, ref_data.get("phone") or "")
+
+    return next_row
+
+
 # ------------------------------------------------------------------
 # ジョブ処理 (ワーカー本体)
 # ------------------------------------------------------------------
@@ -353,9 +467,17 @@ def _process_single_job(
         row_num = find_row_by_phone(ws, phone_col, phone_number)
 
         if row_num is None:
-            _update_job(job_id, "no_match", result_text=summary_text)
-            notify_slack_no_match(job_id, phone_number, summary_text)
-            return
+            ref_ws = find_reference_worksheet(ws.spreadsheet)
+            ref_data = lookup_reference_row(ref_ws, phone_number) if ref_ws else None
+            if ref_data is None:
+                _update_job(job_id, "no_match", result_text=summary_text)
+                notify_slack_no_match(job_id, phone_number, summary_text)
+                return
+            row_num = append_row_from_reference(ws, phone_col, ref_data)
+            logger.info(
+                "job=%d 「%s」に見つからなかったため「%s」から情報を引いて%d行目に新規追加",
+                job_id, ws.title, ref_ws.title, row_num,
+            )
 
         write_with_retry(ws, row_num, detail_col, summary_text)
         if kakudo:
