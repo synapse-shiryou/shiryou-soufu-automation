@@ -65,6 +65,12 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # 書き込み成功時に、案件名とスプレッドシートURLを渡して起動する。未設定なら何もしない。
 SLACK_WORKFLOW_WEBHOOK_URL = os.environ.get("SLACK_WORKFLOW_WEBHOOK_URL")
 
+# 実施者一覧を毎日自動同期するためのSlack Bot Token(channels:read, users:read)。
+# 未設定の場合は同期処理自体をスキップする(手動登録のみで運用可能)。
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+STAFF_SYNC_CHANNEL_ID = os.environ.get("STAFF_SYNC_CHANNEL_ID", "C0B87GX6RCG")  # #13_全体連絡チャンネル
+STAFF_SYNC_INTERVAL_HOURS = 24
+
 # 40名が同時に投げても詰まらないよう、ワーカーが一度に処理する件数を絞る。
 # Geminiの契約プラン(RPM上限)に合わせて調整してください。
 MAX_JOBS_PER_TICK = 5
@@ -640,6 +646,74 @@ def _get_staff_slack_user_id(staff_name: str) -> str | None:
     return row.slack_user_id if row else None
 
 
+def sync_staff_members_from_slack():
+    """SLACK_BOT_TOKENを使い、STAFF_SYNC_CHANNEL_IDのメンバー一覧でstaff_membersを更新する。
+
+    毎日1回、実施者(架電担当者)一覧をSlackチャンネルのメンバーと同期する。
+    Bot/削除済みユーザーは除外し、表示名(表示名が無ければ本名)をnameとして登録する。
+    SLACK_BOT_TOKEN未設定時は何もしない(手動登録のみの運用と互換)。
+    """
+    if not SLACK_BOT_TOKEN:
+        logger.info("[実施者同期] SLACK_BOT_TOKEN未設定のためスキップ")
+        return
+
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+
+    member_ids: list[str] = []
+    cursor = None
+    while True:
+        params = {"channel": STAFF_SYNC_CHANNEL_ID, "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        resp = requests.get(
+            "https://slack.com/api/conversations.members",
+            headers=headers, params=params, timeout=10,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("[実施者同期] conversations.members失敗: %s", data.get("error"))
+            return
+        member_ids.extend(data.get("members", []))
+        cursor = data.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+
+    synced = 0
+    with engine.begin() as conn:
+        for user_id in member_ids:
+            resp = requests.get(
+                "https://slack.com/api/users.info",
+                headers=headers, params={"user": user_id}, timeout=10,
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                logger.warning("[実施者同期] users.info失敗 user=%s: %s", user_id, data.get("error"))
+                continue
+
+            user = data["user"]
+            if user.get("is_bot") or user.get("deleted") or user_id == "USLACKBOT":
+                continue
+
+            profile = user.get("profile", {})
+            name = profile.get("real_name") or user.get("real_name") or profile.get("display_name")
+            if not name:
+                continue
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO staff_members (name, slack_user_id)
+                    VALUES (:name, :slack_user_id)
+                    ON CONFLICT (name) DO UPDATE SET slack_user_id = EXCLUDED.slack_user_id
+                    """
+                ),
+                {"name": name, "slack_user_id": user_id},
+            )
+            synced += 1
+
+    logger.info("[実施者同期] %d名を同期しました", synced)
+
+
 @router.get("/upload", response_class=HTMLResponse)
 async def show_upload_form(request: Request):
     return templates.TemplateResponse(
@@ -722,8 +796,15 @@ scheduler = BackgroundScheduler()
 def on_startup():
     init_db()
     scheduler.add_job(process_pending_jobs, "interval", seconds=WORKER_INTERVAL_SECONDS)
+    scheduler.add_job(sync_staff_members_from_slack, "interval", hours=STAFF_SYNC_INTERVAL_HOURS)
     scheduler.start()
     logger.info("ワーカーを起動しました (interval=%ds, batch=%d)", WORKER_INTERVAL_SECONDS, MAX_JOBS_PER_TICK)
+
+    # 起動直後は次回同期(24時間後)まで待たず、一度すぐに実施者一覧を最新化する
+    try:
+        sync_staff_members_from_slack()
+    except Exception:
+        logger.exception("[実施者同期] 起動時の同期に失敗しました")
 
 
 @app.on_event("shutdown")

@@ -43,6 +43,8 @@
 | `GOOGLE_SERVICE_ACCOUNT_FILE` | 任意 | ローカル実行時、JSONファイルのパスで認証する場合に使用(デフォルト: `service_account.json`)。`GOOGLE_SERVICE_ACCOUNT_JSON` が設定されている場合はそちらが優先される |
 | `UPLOAD_DIR` | 任意 | 音声一時保存先ディレクトリ(デフォルト: `/tmp/shiryou_soufu_uploads`) |
 | `SLACK_WORKFLOW_WEBHOOK_URL` | 任意 | 書き込み成功時に起動するSlackワークフロー(資料送付報告_v2)のWebhook URL。未設定なら通知はログ出力のみ |
+| `SLACK_BOT_TOKEN` | 任意 | 実施者一覧をSlackチャンネルのメンバーと毎日自動同期するためのBot Token(`channels:read`, `users:read`)。未設定なら同期をスキップし、手動登録のみで運用可能 |
+| `STAFF_SYNC_CHANNEL_ID` | 任意 | 実施者一覧の同期元とするSlackチャンネルID(デフォルト: `#13_全体連絡チャンネル` = `C0B87GX6RCG`) |
 
 サービスアカウントには、書き込み対象の各Googleスプレッドシートを「編集者」として共有しておく必要があります
 (100件超のシートに一括で共有するには `admin_scripts/bulk_share_service_account.py` を参照)。
@@ -84,6 +86,12 @@ uvicorn shiryou_soufu_multi_client:app --reload
 
 `staff_members` テーブルに `name`(表示名)と `slack_user_id` を登録しておくと、
 アップロードフォームの「実施者」プルダウンに表示され、Slack通知に実施者名が載ります。
+
+`SLACK_BOT_TOKEN` を設定すると、`STAFF_SYNC_CHANNEL_ID` で指定したSlackチャンネルの
+メンバー一覧を1日1回(起動時にも1回)自動取得し、`staff_members` テーブルを最新化します
+(Bot/削除済みユーザーは除外)。手動登録と併用可能で、同名が既にあれば `slack_user_id` を上書きします。
+
+手動で登録・更新したい場合は以下のSQLも利用できます:
 
 ```sql
 INSERT INTO staff_members (name, slack_user_id)
