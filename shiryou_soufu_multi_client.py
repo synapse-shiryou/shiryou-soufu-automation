@@ -377,7 +377,7 @@ def lookup_reference_row(ref_ws, phone_number: str) -> dict | None:
         "company": get(_find_column(header_values, REF_COMPANY_HEADER_CANDIDATES)),
         "url": get(_find_column(header_values, REF_URL_HEADER_CANDIDATES)),
         "contact": get(_find_column(header_values, REF_CONTACT_HEADER_CANDIDATES)),
-        "lastname": get(_find_column(header_values, REF_LASTNAME_HEADER_CANDIDATES, exact=True)),
+        "lastname": get(_find_column(header_values, REF_LASTNAME_HEADER_CANDIDATES)),
         "firstname": get(_find_column(header_values, REF_FIRSTNAME_HEADER_CANDIDATES, exact=True)),
         "email": get(_find_column(header_values, REF_EMAIL_HEADER_CANDIDATES)),
         "phone": get(ref_phone_col),
@@ -407,7 +407,7 @@ def append_row_from_reference(ws, phone_col: int, ref_data: dict) -> int:
         "company": _find_column(header_values, TARGET_COMPANY_HEADER_CANDIDATES),
         "url": _find_column(header_values, TARGET_URL_HEADER_CANDIDATES),
         "contact": _find_column(header_values, TARGET_CONTACT_HEADER_CANDIDATES),
-        "lastname": _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES, exact=True),
+        "lastname": _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES),
         "firstname": _find_column(header_values, TARGET_FIRSTNAME_HEADER_CANDIDATES, exact=True),
         "email": _find_column(header_values, TARGET_EMAIL_HEADER_CANDIDATES),
     }
@@ -506,7 +506,7 @@ def _process_single_job(
 
         if uploader:
             header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
-            lastname_col = _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES, exact=True)
+            lastname_col = _find_column(header_values, TARGET_LASTNAME_HEADER_CANDIDATES)
             if lastname_col is not None:
                 write_with_retry(ws, row_num, lastname_col, uploader)
             else:
