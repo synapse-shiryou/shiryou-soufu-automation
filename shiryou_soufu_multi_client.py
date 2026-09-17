@@ -397,10 +397,13 @@ async def handle_upload(
     client_code: str,
     phone_number: str = Form(...),
     uploader: str = Form(""),
-    spreadsheet_url: str = Form(""),
+    spreadsheet_url: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
     client_name = _get_client_display_name(client_code)  # 存在しなければ404
+
+    if not spreadsheet_url.strip():
+        raise HTTPException(status_code=400, detail="スプレッドシートURLを入力してください")
 
     suffix = Path(audio_file.filename).suffix or ".mp3"
     saved_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
