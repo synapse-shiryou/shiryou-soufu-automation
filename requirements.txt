@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+jinja2
+sqlalchemy
+psycopg2-binary
+apscheduler
+google-generativeai
+gspread
+google-auth

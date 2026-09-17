@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資料送付報告 音声アップロード - {{ client_name }}</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: #f4f5f7;
+    margin: 0;
+    padding: 24px 16px;
+    color: #1f2933;
+  }
+  .card {
+    max-width: 480px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 32px 24px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+  }
+  .client-name {
+    color: #52606d;
+    font-size: 14px;
+    margin: 0 0 24px;
+  }
+  label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    margin: 16px 0 6px;
+  }
+  input[type="text"],
+  input[type="file"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid #cbd2d9;
+    border-radius: 8px;
+    background: #fff;
+  }
+  button {
+    width: 100%;
+    margin-top: 24px;
+    padding: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: #2563eb;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #1d4ed8;
+  }
+  .message {
+    margin-top: 20px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .message.accepted {
+    background: #ecfdf3;
+    color: #027a48;
+    border: 1px solid #a6f4c5;
+  }
+  .hint {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #7b8794;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>資料送付報告 音声アップロード</h1>
+    <p class="client-name">クライアント: {{ client_name }}（{{ client_code }}）</p>
+
+    {% if result_status == "accepted" %}
+    <div class="message accepted">
+      アップロードを受け付けました。処理が完了次第、Slackに通知されます。
+    </div>
+    {% endif %}
+
+    <form action="/shiryou-soufu/{{ client_code }}/upload" method="post" enctype="multipart/form-data">
+      <label for="phone_number">電話番号</label>
+      <input type="text" id="phone_number" name="phone_number" placeholder="09012345678" required>
+
+      <label for="uploader">担当者名（任意）</label>
+      <input type="text" id="uploader" name="uploader" placeholder="山田太郎">
+
+      <label for="audio_file">架電音声ファイル</label>
+      <input type="file" id="audio_file" name="audio_file" accept="audio/*" required>
+      <p class="hint">対応形式: mp3, m4a, wav など</p>
+
+      <button type="submit">送信</button>
+    </form>
+  </div>
+</body>
+</html>
