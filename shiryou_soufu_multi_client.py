@@ -201,7 +201,6 @@ TARGET_CONTACT_HEADER_CANDIDATES = ["着電先", "役職"]
 TARGET_LASTNAME_HEADER_CANDIDATES = ["姓"]
 TARGET_FIRSTNAME_HEADER_CANDIDATES = ["名"]
 TARGET_EMAIL_HEADER_CANDIDATES = ["メールアドレス"]
-TARGET_SEND_DATE_HEADER_CANDIDATES = ["送付日"]
 TARGET_ACQUIRE_DATE_HEADER_CANDIDATES = ["取得日"]
 
 # 「営業リスト」タブ側で、上記項目を引くための候補列
@@ -417,14 +416,10 @@ def append_row_from_reference(ws, phone_col: int, ref_data: dict) -> int:
         if col is not None and value:
             write_with_retry(ws, next_row, col, value)
 
-    today_str = date.today().strftime("%Y/%m/%d")
-    send_date_col = _find_column(header_values, TARGET_SEND_DATE_HEADER_CANDIDATES)
-    if send_date_col is not None:
-        write_with_retry(ws, next_row, send_date_col, today_str)
-
+    # 送付日は実際に資料を送った時点で手動記入する運用のため、ここでは自動入力しない
     acquire_date_col = _find_column(header_values, TARGET_ACQUIRE_DATE_HEADER_CANDIDATES)
     if acquire_date_col is not None:
-        write_with_retry(ws, next_row, acquire_date_col, today_str)
+        write_with_retry(ws, next_row, acquire_date_col, date.today().strftime("%Y/%m/%d"))
 
     write_with_retry(ws, next_row, phone_col, ref_data.get("phone") or "")
 
