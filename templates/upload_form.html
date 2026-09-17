@@ -108,6 +108,32 @@
   input[type="text"]:focus {
     border-color: var(--accent);
   }
+  select {
+    width: 100%;
+    padding: 11px 12px;
+    font-size: 15px;
+    font-family: var(--font);
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    outline: none;
+    transition: border-color 0.15s ease;
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235b6b64' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 18px;
+  }
+  select:invalid {
+    color: var(--ink-muted);
+  }
+  select option {
+    color: initial;
+  }
+  select:focus {
+    border-color: var(--accent);
+  }
   .dropzone {
     border: 1.5px dashed var(--line);
     border-radius: 8px;
@@ -193,6 +219,14 @@
 
       <label for="spreadsheet_url">スプレッドシートURL</label>
       <input type="text" id="spreadsheet_url" name="spreadsheet_url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+
+      <label for="kakudo">確度</label>
+      <select id="kakudo" name="kakudo" required>
+        <option value="" disabled selected>選択してください</option>
+        <option value="高">高</option>
+        <option value="中">中</option>
+        <option value="低">低</option>
+      </select>
 
       <label for="audio_file">架電音声ファイル</label>
       <div class="dropzone" id="dropzone" tabindex="0">

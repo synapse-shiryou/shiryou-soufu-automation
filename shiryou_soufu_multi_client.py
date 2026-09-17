@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
     uploader        TEXT,
     file_path       TEXT NOT NULL,
     spreadsheet_url TEXT,  -- アップロード画面で直接指定されたURL。指定が無ければclient_sheets側のURLを使う
+    kakudo          TEXT,  -- 確度: 高/中/低
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
     result_text     TEXT,
     error_message   TEXT,
@@ -120,6 +121,7 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
 );
 
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
+ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS kakudo TEXT;
 """
 
 
@@ -180,6 +182,10 @@ TAB_NAME_KEYWORD = "資料送付"
 PHONE_HEADER_CANDIDATES = ["電話番号", "TEL", "電話"]
 DETAIL_HEADER_CANDIDATES = ["詳細", "商談結果詳細記述", "架電メモ", "資料送付報告"]
 HEADER_SEARCH_ROWS = 3  # ヘッダーが1行目にない場合に備えて数行だけ探す
+
+# 確度の書き込み先は固定でM列
+KAKUDO_COLUMN = 13  # A=1, ..., M=13
+KAKUDO_CHOICES = ["高", "中", "低"]
 
 
 def parse_spreadsheet_url(url: str) -> tuple[str, int | None]:
@@ -270,7 +276,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, client_code, phone_number, file_path, spreadsheet_url
+                SELECT id, client_code, phone_number, file_path, spreadsheet_url, kakudo
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -288,11 +294,16 @@ def process_pending_jobs():
             )
 
     for row in rows:
-        _process_single_job(row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url)
+        _process_single_job(row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo)
 
 
 def _process_single_job(
-    job_id: int, client_code: str, phone_number: str, file_path: str, spreadsheet_url_override: str | None = None
+    job_id: int,
+    client_code: str,
+    phone_number: str,
+    file_path: str,
+    spreadsheet_url_override: str | None = None,
+    kakudo: str | None = None,
 ):
     try:
         summary_text = transcribe_and_summarize(file_path)
@@ -330,6 +341,8 @@ def _process_single_job(
             return
 
         write_with_retry(ws, row_num, detail_col, summary_text)
+        if kakudo:
+            write_with_retry(ws, row_num, KAKUDO_COLUMN, kakudo)
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
@@ -398,12 +411,16 @@ async def handle_upload(
     phone_number: str = Form(...),
     uploader: str = Form(""),
     spreadsheet_url: str = Form(...),
+    kakudo: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
     client_name = _get_client_display_name(client_code)  # 存在しなければ404
 
     if not spreadsheet_url.strip():
         raise HTTPException(status_code=400, detail="スプレッドシートURLを入力してください")
+
+    if kakudo not in KAKUDO_CHOICES:
+        raise HTTPException(status_code=400, detail=f"確度は{KAKUDO_CHOICES}のいずれかを選択してください")
 
     suffix = Path(audio_file.filename).suffix or ".mp3"
     saved_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
@@ -414,8 +431,8 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url)
-                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url)
+                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url, kakudo)
+                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo)
                 """
             ),
             {
@@ -424,6 +441,7 @@ async def handle_upload(
                 "uploader": uploader,
                 "file_path": str(saved_path),
                 "spreadsheet_url": spreadsheet_url.strip() or None,
+                "kakudo": kakudo,
             },
         )
 
