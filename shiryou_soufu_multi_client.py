@@ -540,16 +540,16 @@ def _process_single_job(
         return
 
     if gemini_error:
-        # 他項目は書き込み済みだが、ヒアリング内容(Geminiの要約)だけは手動記入が必要
+        # 他項目は書き込み済みだが、ヒアリング内容(Geminiの要約)だけは手動記入が必要。
+        # 行自体の特定・更新は完了しているので、Slack通知は通常どおり出す。
         _update_job(
             job_id, "error",
             error_message=f"Gemini処理失敗(電話番号キーでの他項目書き込みは完了): {gemini_error}",
             result_text=summary_text,
         )
-        notify_slack_failure(job_id, phone_number)
-        return
+    else:
+        _update_job(job_id, "done", result_text=summary_text)
 
-    _update_job(job_id, "done", result_text=summary_text)
     notify_slack_success(job_id, row_num, summary_text)
 
     # Slack ワークフロー側で「表示名」形式のSlackユーザーID変数として解決させるため、
