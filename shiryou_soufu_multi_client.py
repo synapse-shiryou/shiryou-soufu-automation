@@ -106,17 +106,20 @@ CREATE TABLE IF NOT EXISTS client_sheets (
 );
 
 CREATE TABLE IF NOT EXISTS audio_jobs (
-    id            SERIAL PRIMARY KEY,
-    client_code   TEXT NOT NULL REFERENCES client_sheets(client_code),
-    phone_number  TEXT NOT NULL,
-    uploader      TEXT,
-    file_path     TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
-    result_text   TEXT,
-    error_message TEXT,
-    created_at    TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMP NOT NULL DEFAULT now()
+    id              SERIAL PRIMARY KEY,
+    client_code     TEXT NOT NULL REFERENCES client_sheets(client_code),
+    phone_number    TEXT NOT NULL,
+    uploader        TEXT,
+    file_path       TEXT NOT NULL,
+    spreadsheet_url TEXT,  -- アップロード画面で直接指定されたURL。指定が無ければclient_sheets側のURLを使う
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
+    result_text     TEXT,
+    error_message   TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMP NOT NULL DEFAULT now()
 );
+
+ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
 """
 
 
@@ -267,7 +270,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, client_code, phone_number, file_path
+                SELECT id, client_code, phone_number, file_path, spreadsheet_url
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -285,10 +288,12 @@ def process_pending_jobs():
             )
 
     for row in rows:
-        _process_single_job(row.id, row.client_code, row.phone_number, row.file_path)
+        _process_single_job(row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url)
 
 
-def _process_single_job(job_id: int, client_code: str, phone_number: str, file_path: str):
+def _process_single_job(
+    job_id: int, client_code: str, phone_number: str, file_path: str, spreadsheet_url_override: str | None = None
+):
     try:
         summary_text = transcribe_and_summarize(file_path)
     except Exception as e:
@@ -312,8 +317,10 @@ def _process_single_job(job_id: int, client_code: str, phone_number: str, file_p
         _update_job(job_id, "error", error_message=f"未知のclient_code: {client_code}")
         return
 
+    spreadsheet_url = spreadsheet_url_override or client.spreadsheet_url
+
     try:
-        ws = resolve_worksheet(client.spreadsheet_url)
+        ws = resolve_worksheet(spreadsheet_url)
         phone_col, detail_col = find_header_columns(ws)
         row_num = find_row_by_phone(ws, phone_col, phone_number)
 
@@ -390,6 +397,7 @@ async def handle_upload(
     client_code: str,
     phone_number: str = Form(...),
     uploader: str = Form(""),
+    spreadsheet_url: str = Form(""),
     audio_file: UploadFile = File(...),
 ):
     client_name = _get_client_display_name(client_code)  # 存在しなければ404
@@ -403,8 +411,8 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path)
-                VALUES (:client_code, :phone_number, :uploader, :file_path)
+                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url)
+                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url)
                 """
             ),
             {
@@ -412,6 +420,7 @@ async def handle_upload(
                 "phone_number": phone_number,
                 "uploader": uploader,
                 "file_path": str(saved_path),
+                "spreadsheet_url": spreadsheet_url.strip() or None,
             },
         )
 

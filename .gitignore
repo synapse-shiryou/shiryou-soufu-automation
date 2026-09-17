@@ -21,3 +21,10 @@ service_account.json
 
 # Uploaded audio (local dev)
 /tmp_uploads/
+
+# Admin scripts (local credentials, never commit)
+/admin_scripts/client_secret.json
+/admin_scripts/token.json
+/admin_scripts/*.log
+/admin_scripts/bulk_share_progress.jsonl
+/admin_scripts/bulk_share_report.json
