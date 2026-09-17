@@ -1,107 +1,254 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>資料送付報告 音声アップロード - {{ client_name }}</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ client_name }} - 架電音声アップロード</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --bg: #eef1ef;
+    --panel: #ffffff;
+    --ink: #16231f;
+    --ink-muted: #5b6b64;
+    --line: #d8ddda;
+    --accent: #2b6f63;
+    --accent-ink: #ffffff;
+    --success-bg: #e7f2ea;
+    --success-ink: #245c3a;
+    --error-bg: #fbe9e5;
+    --error-ink: #8a3423;
+    --radius: 10px;
+    --font: "Inter", -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12181a;
+      --panel: #1b2225;
+      --ink: #eef1ef;
+      --ink-muted: #9aa79f;
+      --line: #303a3c;
+      --accent: #4d9c8c;
+      --accent-ink: #0c1413;
+      --success-bg: #17301f;
+      --success-ink: #8fd6a5;
+      --error-bg: #351d18;
+      --error-ink: #f0a691;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12181a;
+    --panel: #1b2225;
+    --ink: #eef1ef;
+    --ink-muted: #9aa79f;
+    --line: #303a3c;
+    --accent: #4d9c8c;
+    --accent-ink: #0c1413;
+    --success-bg: #17301f;
+    --success-ink: #8fd6a5;
+    --error-bg: #351d18;
+    --error-ink: #f0a691;
+  }
+
+  * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
-    background: #f4f5f7;
     margin: 0;
-    padding: 24px 16px;
-    color: #1f2933;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 48px 20px;
   }
-  .card {
+  main {
+    width: 100%;
     max-width: 480px;
-    margin: 0 auto;
-    background: #ffffff;
-    border-radius: 12px;
-    padding: 32px 24px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   }
-  h1 {
-    font-size: 20px;
+  .eyebrow {
+    font-size: 13px;
+    color: var(--ink-muted);
     margin: 0 0 4px;
   }
-  .client-name {
-    color: #52606d;
-    font-size: 14px;
-    margin: 0 0 24px;
+  h1 {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 0 0 28px;
+    letter-spacing: -0.01em;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 28px;
   }
   label {
     display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-muted);
+    margin: 20px 0 6px;
+  }
+  label:first-of-type { margin-top: 0; }
+  input[type="text"] {
+    width: 100%;
+    padding: 11px 12px;
+    font-size: 15px;
+    font-family: var(--font);
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+  input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+  .dropzone {
+    border: 1.5px dashed var(--line);
+    border-radius: 8px;
+    padding: 22px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .dropzone.drag-over {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .dropzone input[type="file"] {
+    display: none;
+  }
+  .dropzone-label {
+    font-size: 14px;
+    color: var(--ink-muted);
+  }
+  .dropzone-filename {
     font-size: 14px;
     font-weight: 600;
-    margin: 16px 0 6px;
-  }
-  input[type="text"],
-  input[type="file"] {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    font-size: 14px;
-    border: 1px solid #cbd2d9;
-    border-radius: 8px;
-    background: #fff;
+    color: var(--ink);
+    margin-top: 6px;
+    word-break: break-all;
   }
   button {
     width: 100%;
     margin-top: 24px;
-    padding: 12px;
+    padding: 13px;
     font-size: 15px;
     font-weight: 600;
-    color: #fff;
-    background: #2563eb;
+    font-family: var(--font);
+    color: var(--accent-ink);
+    background: var(--accent);
     border: none;
     border-radius: 8px;
     cursor: pointer;
+    transition: opacity 0.15s ease;
   }
-  button:hover {
-    background: #1d4ed8;
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button:focus-visible, input:focus-visible, .dropzone:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
-  .message {
+
+  .notice {
     margin-top: 20px;
-    padding: 12px 14px;
+    padding: 16px;
     border-radius: 8px;
     font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
   }
-  .message.accepted {
-    background: #ecfdf3;
-    color: #027a48;
-    border: 1px solid #a6f4c5;
-  }
+  .notice.success { background: var(--success-bg); color: var(--success-ink); }
+  .notice.error { background: var(--error-bg); color: var(--error-ink); }
+
   .hint {
-    margin-top: 8px;
+    margin-top: 16px;
     font-size: 12px;
-    color: #7b8794;
+    color: var(--ink-muted);
+    line-height: 1.6;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
   }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>資料送付報告 音声アップロード</h1>
-    <p class="client-name">クライアント: {{ client_name }}（{{ client_code }}）</p>
+<main>
+  <p class="eyebrow">{{ client_name }}</p>
+  <h1>架電音声から資料送付報告を作成</h1>
 
-    {% if result_status == "accepted" %}
-    <div class="message accepted">
-      アップロードを受け付けました。処理が完了次第、Slackに通知されます。
-    </div>
-    {% endif %}
-
-    <form action="/shiryou-soufu/{{ client_code }}/upload" method="post" enctype="multipart/form-data">
+  <div class="panel">
+    <form action="/shiryou-soufu/{{ client_code }}/upload" method="post" enctype="multipart/form-data" id="upload-form">
       <label for="phone_number">電話番号</label>
-      <input type="text" id="phone_number" name="phone_number" placeholder="09012345678" required>
+      <input type="text" id="phone_number" name="phone_number" placeholder="06-6438-8191" required>
 
-      <label for="uploader">担当者名（任意）</label>
-      <input type="text" id="uploader" name="uploader" placeholder="山田太郎">
+      <label for="uploader">お名前(任意)</label>
+      <input type="text" id="uploader" name="uploader" placeholder="架電担当のお名前">
 
       <label for="audio_file">架電音声ファイル</label>
-      <input type="file" id="audio_file" name="audio_file" accept="audio/*" required>
-      <p class="hint">対応形式: mp3, m4a, wav など</p>
+      <div class="dropzone" id="dropzone" tabindex="0">
+        <input type="file" id="audio_file" name="audio_file" accept="audio/*" required>
+        <div class="dropzone-label" id="dropzone-label">クリックまたはドラッグ＆ドロップでファイルを選択</div>
+        <div class="dropzone-filename" id="dropzone-filename"></div>
+      </div>
 
-      <button type="submit">送信</button>
+      <button type="submit" id="submit-button">アップロード</button>
     </form>
+
+    {% if result_status == "accepted" %}
+      <div class="notice success">受付しました。処理が完了次第Slackでお知らせします。このページは閉じて問題ありません。</div>
+    {% elif result_status == "no_match" %}
+      <div class="notice error">電話番号「{{ result_phone }}」に一致する行が見つかりませんでした。以下の内容を手動でK列に貼り付けてください。
+
+{{ result_text }}</div>
+    {% elif result_status == "error" %}
+      <div class="notice error">処理中にエラーが発生しました。もう一度お試しいただくか、担当までご連絡ください。</div>
+    {% endif %}
+
+    <p class="hint">音声はGeminiで自動的に要約され、対象企業の行に反映されます。反映結果はSlackに届きます。</p>
   </div>
+</main>
+
+<script>
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("audio_file");
+  const filenameLabel = document.getElementById("dropzone-filename");
+  const submitButton = document.getElementById("submit-button");
+  const form = document.getElementById("upload-form");
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  });
+
+  ["dragover", "dragenter"].forEach(evt =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add("drag-over"); })
+  );
+  ["dragleave", "drop"].forEach(evt =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove("drag-over"); })
+  );
+  dropzone.addEventListener("drop", (e) => {
+    if (e.dataTransfer.files.length) {
+      fileInput.files = e.dataTransfer.files;
+      updateFilename();
+    }
+  });
+  fileInput.addEventListener("change", updateFilename);
+
+  function updateFilename() {
+    filenameLabel.textContent = fileInput.files.length ? fileInput.files[0].name : "";
+  }
+
+  form.addEventListener("submit", () => {
+    submitButton.disabled = true;
+    submitButton.textContent = "アップロード中…";
+  });
+</script>
 </body>
 </html>
