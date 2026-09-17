@@ -207,25 +207,37 @@ def parse_spreadsheet_url(url: str) -> tuple[str, int | None]:
 
 
 def resolve_worksheet(spreadsheet_url: str):
-    """URLからスプレッドシート・タブを自動解決する"""
+    """URLからスプレッドシート・タブを自動解決する。
+
+    URLのgidは、タブを切り替えた状態でコピーすると意図しないタブを指してしまいがちなので
+    信用しすぎない。常にタブ名に TAB_NAME_KEYWORD を含むタブを優先的に探し、
+    複数該当した場合だけgidで絞り込む。該当タブが無い場合のみgidにフォールバックする。
+    """
     spreadsheet_id, gid = parse_spreadsheet_url(spreadsheet_url)
     sh = get_gspread_client().open_by_key(spreadsheet_id)
 
+    candidates = [ws for ws in sh.worksheets() if TAB_NAME_KEYWORD in ws.title]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if len(candidates) > 1:
+        if gid is not None:
+            for ws in candidates:
+                if ws.id == gid:
+                    return ws
+        raise RuntimeError(
+            f"「{TAB_NAME_KEYWORD}」を含むタブが複数見つかりました({[w.title for w in candidates]})。"
+            "書き込みたいタブを開いた状態のURL(gid付き)を貼り直してください。"
+        )
+
+    # 「資料送付」を含むタブが無ければ、gid指定を最後の手段として使う
     if gid is not None:
         for ws in sh.worksheets():
             if ws.id == gid:
                 return ws
         raise RuntimeError(f"gid={gid} のタブが見つかりません: {spreadsheet_id}")
 
-    # gid指定が無い場合、タブ名に TAB_NAME_KEYWORD を含むものを探す
-    candidates = [ws for ws in sh.worksheets() if TAB_NAME_KEYWORD in ws.title]
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) > 1:
-        raise RuntimeError(
-            f"「{TAB_NAME_KEYWORD}」を含むタブが複数見つかりました({[w.title for w in candidates]})。"
-            "URLにgidを含めて登録し直してください。"
-        )
     raise RuntimeError(f"「{TAB_NAME_KEYWORD}」を含むタブが見つかりません: {spreadsheet_id}")
 
 
