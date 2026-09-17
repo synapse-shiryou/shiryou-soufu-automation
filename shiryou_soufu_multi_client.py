@@ -388,12 +388,17 @@ def lookup_reference_row(ref_ws, phone_number: str) -> dict | None:
 
 
 def _find_next_empty_row(ws) -> int:
-    """シート全体を見て、どの列にもデータが無い最初の行番号を返す。
+    """取得日列の最終入力行を基準に、次に書き込むべき空き行を返す。
 
-    A列など特定の列だけで判定すると、その列だけ空欄の実データ行を
-    「空き行」と誤認識して上書きしてしまう事故につながるため、
-    行全体(get_all_values)でデータの有無を判定する。
+    取得日は実データの行なら必ず入っている運用のため、これを基準にすれば
+    他の列(A列など)がたまたま空欄でも実データ行を誤って上書きしない。
+    取得日列が見つからない場合のみ、行全体(get_all_values)で判定する。
     """
+    header_values = ws.get_values(f"A1:ZZ{HEADER_SEARCH_ROWS}")
+    acquire_date_col = _find_column(header_values, TARGET_ACQUIRE_DATE_HEADER_CANDIDATES)
+    if acquire_date_col is not None:
+        return len(ws.col_values(acquire_date_col)) + 1
+
     all_values = ws.get_all_values()
     for i in range(len(all_values) - 1, -1, -1):
         if any(cell.strip() for cell in all_values[i]):
