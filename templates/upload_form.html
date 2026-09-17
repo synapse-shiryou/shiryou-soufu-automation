@@ -228,6 +228,14 @@
         <option value="低">低</option>
       </select>
 
+      <label for="staff_name">実施者</label>
+      <select id="staff_name" name="staff_name" required>
+        <option value="" disabled selected>選択してください</option>
+        {% for name in staff_members %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+
       <label for="audio_file">架電音声ファイル</label>
       <div class="dropzone" id="dropzone" tabindex="0">
         <input type="file" id="audio_file" name="audio_file" accept="audio/*" required>

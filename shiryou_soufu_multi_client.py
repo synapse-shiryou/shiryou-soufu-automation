@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
     file_path       TEXT NOT NULL,
     spreadsheet_url TEXT,  -- アップロード画面で直接指定されたURL。指定が無ければclient_sheets側のURLを使う
     kakudo          TEXT,  -- 確度: 高/中/低
+    staff_name      TEXT,  -- 実施した架電担当者(staff_members.nameを選択)
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
     result_text     TEXT,
     error_message   TEXT,
@@ -125,8 +126,14 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
     updated_at      TIMESTAMP NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS staff_members (
+    name           TEXT PRIMARY KEY,
+    slack_user_id  TEXT NOT NULL
+);
+
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS kakudo TEXT;
+ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS staff_name TEXT;
 """
 
 
@@ -281,7 +288,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, client_code, phone_number, file_path, spreadsheet_url, kakudo
+                SELECT id, client_code, phone_number, file_path, spreadsheet_url, kakudo, staff_name
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -299,7 +306,9 @@ def process_pending_jobs():
             )
 
     for row in rows:
-        _process_single_job(row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo)
+        _process_single_job(
+            row.id, row.client_code, row.phone_number, row.file_path, row.spreadsheet_url, row.kakudo, row.staff_name
+        )
 
 
 def _process_single_job(
@@ -309,6 +318,7 @@ def _process_single_job(
     file_path: str,
     spreadsheet_url_override: str | None = None,
     kakudo: str | None = None,
+    staff_name: str | None = None,
 ):
     try:
         summary_text = transcribe_and_summarize(file_path)
@@ -356,7 +366,16 @@ def _process_single_job(
 
     _update_job(job_id, "done", result_text=summary_text)
     notify_slack_success(job_id, client.display_name, row_num, summary_text)
-    trigger_shiryou_soufu_workflow(official_deal_name=ws.spreadsheet.title, spreadsheet_url=spreadsheet_url)
+
+    # Slack ワークフロー側で「表示名」形式のSlackユーザーID変数として解決させるため、
+    # <@...>で囲まず生のユーザーIDを渡す。見つからない場合は入力名をそのまま渡す。
+    staff_slack_user_id = _get_staff_slack_user_id(staff_name) if staff_name else None
+    uploader_mention = staff_slack_user_id or (staff_name or "")
+    trigger_shiryou_soufu_workflow(
+        official_deal_name=ws.spreadsheet.title,
+        spreadsheet_url=spreadsheet_url,
+        uploader_mention=uploader_mention,
+    )
 
 
 def _update_job(job_id: int, status: str, result_text: str | None = None, error_message: str | None = None):
@@ -389,7 +408,7 @@ def notify_slack_failure(job_id, client_code, phone_number):
     logger.info("[Slack失敗通知] client=%s phone=%s job=%d", client_code, phone_number, job_id)
 
 
-def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str):
+def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str, uploader_mention: str = ""):
     """Slackワークフロー「資料送付報告_v2」のWebhookトリガーを起動する。"""
     if not SLACK_WORKFLOW_WEBHOOK_URL:
         logger.info("[Slackワークフロー] SLACK_WORKFLOW_WEBHOOK_URL未設定のためスキップ")
@@ -397,7 +416,11 @@ def trigger_shiryou_soufu_workflow(official_deal_name: str, spreadsheet_url: str
     try:
         response = requests.post(
             SLACK_WORKFLOW_WEBHOOK_URL,
-            json={"official_deal_name": official_deal_name, "spreadsheet_url": spreadsheet_url},
+            json={
+                "official_deal_name": official_deal_name,
+                "spreadsheet_url": spreadsheet_url,
+                "uploader_mention": uploader_mention,
+            },
             timeout=10,
         )
         response.raise_for_status()
@@ -412,6 +435,21 @@ router = APIRouter(prefix="/shiryou-soufu", tags=["shiryou-soufu"])
 templates = Jinja2Templates(directory="templates")  # templates/upload_form.html を配置してください
 
 
+def _get_staff_names() -> list[str]:
+    with engine.begin() as conn:
+        rows = conn.execute(text("SELECT name FROM staff_members ORDER BY name")).fetchall()
+    return [r.name for r in rows]
+
+
+def _get_staff_slack_user_id(staff_name: str) -> str | None:
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT slack_user_id FROM staff_members WHERE name=:n"),
+            {"n": staff_name},
+        ).fetchone()
+    return row.slack_user_id if row else None
+
+
 @router.get("/{client_code}/upload", response_class=HTMLResponse)
 async def show_upload_form(request: Request, client_code: str):
     client_name = _get_client_display_name(client_code)
@@ -422,6 +460,7 @@ async def show_upload_form(request: Request, client_code: str):
             "client_code": client_code,
             "client_name": client_name,
             "result_status": None,
+            "staff_members": _get_staff_names(),
         },
     )
 
@@ -434,6 +473,7 @@ async def handle_upload(
     uploader: str = Form(""),
     spreadsheet_url: str = Form(...),
     kakudo: str = Form(...),
+    staff_name: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
     client_name = _get_client_display_name(client_code)  # 存在しなければ404
@@ -444,6 +484,9 @@ async def handle_upload(
     if kakudo not in KAKUDO_CHOICES:
         raise HTTPException(status_code=400, detail=f"確度は{KAKUDO_CHOICES}のいずれかを選択してください")
 
+    if staff_name not in _get_staff_names():
+        raise HTTPException(status_code=400, detail="実施者を選択してください")
+
     suffix = Path(audio_file.filename).suffix or ".mp3"
     saved_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
     with open(saved_path, "wb") as f:
@@ -453,8 +496,8 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url, kakudo)
-                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo)
+                INSERT INTO audio_jobs (client_code, phone_number, uploader, file_path, spreadsheet_url, kakudo, staff_name)
+                VALUES (:client_code, :phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :staff_name)
                 """
             ),
             {
@@ -464,6 +507,7 @@ async def handle_upload(
                 "file_path": str(saved_path),
                 "spreadsheet_url": spreadsheet_url.strip() or None,
                 "kakudo": kakudo,
+                "staff_name": staff_name,
             },
         )
 
@@ -474,6 +518,7 @@ async def handle_upload(
             "client_code": client_code,
             "client_name": client_name,
             "result_status": "accepted",
+            "staff_members": _get_staff_names(),
         },
     )
 

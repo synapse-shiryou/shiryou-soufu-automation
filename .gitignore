@@ -28,3 +28,7 @@ service_account.json
 /admin_scripts/*.log
 /admin_scripts/bulk_share_progress.jsonl
 /admin_scripts/bulk_share_report.json
+
+# 個人情報(実名・メールアドレス・Slack ID)を含むため非公開のまま
+/admin_scripts/staff_members_raw.txt
+/admin_scripts/insert_staff_members.sql
