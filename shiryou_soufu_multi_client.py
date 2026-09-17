@@ -103,6 +103,72 @@ PROMPT = """役割
 ・先方の現状や受け止め方：
 """
 
+PROMPT_APO = """役割
+あなたは、営業架電の音声文字起こしまたは架電メモから、Slack共有・商談引き継ぎ用の「アポ獲得報告」を作成するアシスタントです。
+資料送付報告と異なり、商談を引き継ぐ営業担当者が事前準備できるよう、分かっている範囲で担当者情報・企業情報も出力してください。
+入力データをもとに、以下のFMTだけで出力してください。
+絶対ルール
+・出力FMTの見出し、項目名、順番は絶対に変更しないでください
+・FMTにない項目は絶対に追加しないでください
+・前置き、説明、分析コメント、注意書きは一切出力しないでください
+・入力データにない情報は「不明」と記載してください
+・入力データにない情報を推測で作らないでください
+・音声の言い間違い、言い淀み、重複表現は整理してください
+・相手の発言をそのまま長く引用せず、営業共有用に短く要約してください
+・NG理由、断り文句、不要な雑談は一切含めないでください
+・アポ獲得に至った理由、相手の意思・理解、興味関心、商談を引き継ぐ担当者が使える情報だけを残してください
+・全体は短い箇条書きで、見ただけでわかる状態にしてください
+出力FMT
+【アポ獲得報告】
+① 案件名
+案件名：
+
+② アポ先企業情報
+企業名：
+業界：
+電話番号：
+
+③ 担当者情報
+担当者名：
+部署名・役職：
+人柄・印象：
+性別：
+
+④ 商談方法
+オンライン / 電話 / 訪問：
+
+⑤ 共有した内容
+伝えたメリットや数字：
+
+⑥ 相手の意思・理解
+先方の現状や受け止め方：
+
+⑦ どこに興味を持っているか
+一番食いつきが良かった部分：
+
+⑧ 先方の興味・角度
+先方の興味がどのくらいの確度なのか：
+理由：
+
+⑨ ニーズ属性
+顕在ニーズ / 潜在ニーズ：
+理由：
+
+⑩ 管理者への共有事項
+確認してほしいこと：
+補足：
+"""
+
+REPORT_TYPE_CHOICES = ["資料送付", "アポ獲得"]
+REPORT_TYPE_TAB_KEYWORDS = {
+    "資料送付": "資料送付",
+    "アポ獲得": "商談アポ",
+}
+REPORT_TYPE_PROMPTS = {
+    "資料送付": PROMPT,
+    "アポ獲得": PROMPT_APO,
+}
+
 # ------------------------------------------------------------------
 # DBスキーマ (初回起動時に作成)
 # ------------------------------------------------------------------
@@ -113,8 +179,9 @@ CREATE TABLE IF NOT EXISTS audio_jobs (
     uploader        TEXT,
     file_path       TEXT NOT NULL,
     spreadsheet_url TEXT NOT NULL,  -- アップロード画面で毎回指定されるスプレッドシートURL
-    kakudo          TEXT,  -- 確度: 高/中/低
-    chakuden_saki   TEXT,  -- 着電先: 受付/担当者/代表
+    kakudo          TEXT,  -- 確度: 高/中/低(資料送付のみ)
+    chakuden_saki   TEXT,  -- 着電先: 受付/担当者/代表(資料送付のみ)
+    report_type     TEXT NOT NULL DEFAULT '資料送付',  -- 報告種別: 資料送付/アポ獲得
     staff_name      TEXT,  -- 実施した架電担当者(staff_members.nameを選択)
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/done/no_match/error
     result_text     TEXT,
@@ -135,6 +202,7 @@ ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS spreadsheet_url TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS kakudo TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS staff_name TEXT;
 ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS chakuden_saki TEXT;
+ALTER TABLE audio_jobs ADD COLUMN IF NOT EXISTS report_type TEXT NOT NULL DEFAULT '資料送付';
 DROP TABLE IF EXISTS client_sheets;
 """
 
@@ -147,9 +215,9 @@ def init_db():
 # ------------------------------------------------------------------
 # Gemini / Sheets 呼び出し
 # ------------------------------------------------------------------
-def transcribe_and_summarize(audio_path: str) -> str:
+def transcribe_and_summarize(audio_path: str, prompt: str = PROMPT) -> str:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=PROMPT)
+    model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=prompt)
 
     audio_file = genai.upload_file(path=audio_path)
     while audio_file.state.name == "PROCESSING":
@@ -160,7 +228,7 @@ def transcribe_and_summarize(audio_path: str) -> str:
         raise RuntimeError(f"Gemini file upload failed: {audio_file.name}")
 
     response = model.generate_content(
-        [audio_file, "この音声をもとに、指示されたFMTで資料送付報告を作成してください。"]
+        [audio_file, "この音声をもとに、指示されたFMTで報告を作成してください。"]
     )
     return response.text.strip()
 
@@ -235,17 +303,17 @@ def parse_spreadsheet_url(url: str) -> tuple[str, int | None]:
     return spreadsheet_id, gid
 
 
-def resolve_worksheet(spreadsheet_url: str):
+def resolve_worksheet(spreadsheet_url: str, tab_keyword: str = TAB_NAME_KEYWORD):
     """URLからスプレッドシート・タブを自動解決する。
 
     URLのgidは、タブを切り替えた状態でコピーすると意図しないタブを指してしまいがちなので
-    信用しすぎない。常にタブ名に TAB_NAME_KEYWORD を含むタブを優先的に探し、
+    信用しすぎない。常にタブ名に tab_keyword を含むタブを優先的に探し、
     複数該当した場合だけgidで絞り込む。該当タブが無い場合のみgidにフォールバックする。
     """
     spreadsheet_id, gid = parse_spreadsheet_url(spreadsheet_url)
     sh = get_gspread_client().open_by_key(spreadsheet_id)
 
-    candidates = [ws for ws in sh.worksheets() if TAB_NAME_KEYWORD in ws.title]
+    candidates = [ws for ws in sh.worksheets() if tab_keyword in ws.title]
 
     if len(candidates) == 1:
         return candidates[0]
@@ -256,18 +324,18 @@ def resolve_worksheet(spreadsheet_url: str):
                 if ws.id == gid:
                     return ws
         raise RuntimeError(
-            f"「{TAB_NAME_KEYWORD}」を含むタブが複数見つかりました({[w.title for w in candidates]})。"
+            f"「{tab_keyword}」を含むタブが複数見つかりました({[w.title for w in candidates]})。"
             "書き込みたいタブを開いた状態のURL(gid付き)を貼り直してください。"
         )
 
-    # 「資料送付」を含むタブが無ければ、gid指定を最後の手段として使う
+    # 対象キーワードを含むタブが無ければ、gid指定を最後の手段として使う
     if gid is not None:
         for ws in sh.worksheets():
             if ws.id == gid:
                 return ws
         raise RuntimeError(f"gid={gid} のタブが見つかりません: {spreadsheet_id}")
 
-    raise RuntimeError(f"「{TAB_NAME_KEYWORD}」を含むタブが見つかりません: {spreadsheet_id}")
+    raise RuntimeError(f"「{tab_keyword}」を含むタブが見つかりません: {spreadsheet_id}")
 
 
 def find_header_columns(ws) -> tuple[int, int, int | None]:
@@ -448,7 +516,7 @@ def process_pending_jobs():
         rows = conn.execute(
             text(
                 """
-                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name, uploader, chakuden_saki
+                SELECT id, phone_number, file_path, spreadsheet_url, kakudo, staff_name, uploader, chakuden_saki, report_type
                 FROM audio_jobs
                 WHERE status = 'pending'
                 ORDER BY created_at
@@ -468,7 +536,7 @@ def process_pending_jobs():
     for row in rows:
         _process_single_job(
             row.id, row.phone_number, row.file_path, row.spreadsheet_url,
-            row.kakudo, row.staff_name, row.uploader, row.chakuden_saki,
+            row.kakudo, row.staff_name, row.uploader, row.chakuden_saki, row.report_type,
         )
 
 
@@ -481,11 +549,15 @@ def _process_single_job(
     staff_name: str | None = None,
     uploader: str | None = None,
     chakuden_saki: str | None = None,
+    report_type: str = "資料送付",
 ):
+    tab_keyword = REPORT_TYPE_TAB_KEYWORDS.get(report_type, TAB_NAME_KEYWORD)
+    prompt = REPORT_TYPE_PROMPTS.get(report_type, PROMPT)
+
     summary_text = None
     gemini_error = None
     try:
-        summary_text = transcribe_and_summarize(file_path)
+        summary_text = transcribe_and_summarize(file_path, prompt)
     except Exception as e:
         # Geminiの文字起こし・要約が失敗しても、電話番号キーでの行特定・確度・
         # お名前などの他項目の書き込みは続行する(ヒアリング内容欄だけが空欄になる)。
@@ -498,7 +570,7 @@ def _process_single_job(
             pass
 
     try:
-        ws = resolve_worksheet(spreadsheet_url)
+        ws = resolve_worksheet(spreadsheet_url, tab_keyword)
         phone_col, detail_col, kakudo_col = find_header_columns(ws)
         row_num = find_row_by_phone(ws, phone_col, phone_number)
 
@@ -732,19 +804,26 @@ async def handle_upload(
     phone_number: str = Form(...),
     uploader: str = Form(""),
     spreadsheet_url: str = Form(...),
-    kakudo: str = Form(...),
-    chakuden_saki: str = Form(...),
+    report_type: str = Form(...),
+    kakudo: str = Form(""),
+    chakuden_saki: str = Form(""),
     staff_name: str = Form(...),
     audio_file: UploadFile = File(...),
 ):
     if not spreadsheet_url.strip():
         raise HTTPException(status_code=400, detail="スプレッドシートURLを入力してください")
 
-    if kakudo not in KAKUDO_CHOICES:
-        raise HTTPException(status_code=400, detail=f"確度は{KAKUDO_CHOICES}のいずれかを選択してください")
+    if report_type not in REPORT_TYPE_CHOICES:
+        raise HTTPException(status_code=400, detail=f"報告種別は{REPORT_TYPE_CHOICES}のいずれかを選択してください")
 
-    if chakuden_saki not in CHAKUDEN_SAKI_CHOICES:
-        raise HTTPException(status_code=400, detail=f"着電先は{CHAKUDEN_SAKI_CHOICES}のいずれかを選択してください")
+    if report_type == "資料送付":
+        if kakudo not in KAKUDO_CHOICES:
+            raise HTTPException(status_code=400, detail=f"確度は{KAKUDO_CHOICES}のいずれかを選択してください")
+        if chakuden_saki not in CHAKUDEN_SAKI_CHOICES:
+            raise HTTPException(status_code=400, detail=f"着電先は{CHAKUDEN_SAKI_CHOICES}のいずれかを選択してください")
+    else:
+        kakudo = ""
+        chakuden_saki = ""
 
     if staff_name not in _get_staff_names():
         raise HTTPException(status_code=400, detail="実施者を選択してください")
@@ -758,8 +837,8 @@ async def handle_upload(
         conn.execute(
             text(
                 """
-                INSERT INTO audio_jobs (phone_number, uploader, file_path, spreadsheet_url, kakudo, chakuden_saki, staff_name)
-                VALUES (:phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :chakuden_saki, :staff_name)
+                INSERT INTO audio_jobs (phone_number, uploader, file_path, spreadsheet_url, kakudo, chakuden_saki, staff_name, report_type)
+                VALUES (:phone_number, :uploader, :file_path, :spreadsheet_url, :kakudo, :chakuden_saki, :staff_name, :report_type)
                 """
             ),
             {
@@ -770,6 +849,7 @@ async def handle_upload(
                 "kakudo": kakudo,
                 "chakuden_saki": chakuden_saki,
                 "staff_name": staff_name,
+                "report_type": report_type,
             },
         )
 

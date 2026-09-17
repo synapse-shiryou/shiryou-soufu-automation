@@ -207,10 +207,17 @@
 <body>
 <main>
   <p class="eyebrow">資料送付報告</p>
-  <h1>架電音声から資料送付報告を作成</h1>
+  <h1>架電音声から資料送付報告・アポ獲得報告を作成</h1>
 
   <div class="panel">
     <form action="/shiryou-soufu/upload" method="post" enctype="multipart/form-data" id="upload-form">
+      <label for="report_type">報告種別</label>
+      <select id="report_type" name="report_type" required>
+        <option value="" disabled selected>選択してください</option>
+        <option value="資料送付">資料送付</option>
+        <option value="アポ獲得">アポ獲得</option>
+      </select>
+
       <label for="phone_number">電話番号</label>
       <input type="text" id="phone_number" name="phone_number" placeholder="06-6438-8191" required>
 
@@ -220,21 +227,23 @@
       <label for="spreadsheet_url">スプレッドシートURL</label>
       <input type="text" id="spreadsheet_url" name="spreadsheet_url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
 
-      <label for="kakudo">確度</label>
-      <select id="kakudo" name="kakudo" required>
-        <option value="" disabled selected>選択してください</option>
-        <option value="高">高</option>
-        <option value="中">中</option>
-        <option value="低">低</option>
-      </select>
+      <div id="shiryou-soufu-fields">
+        <label for="kakudo">確度</label>
+        <select id="kakudo" name="kakudo">
+          <option value="" disabled selected>選択してください</option>
+          <option value="高">高</option>
+          <option value="中">中</option>
+          <option value="低">低</option>
+        </select>
 
-      <label for="chakuden_saki">着電先</label>
-      <select id="chakuden_saki" name="chakuden_saki" required>
-        <option value="" disabled selected>選択してください</option>
-        <option value="受付">受付</option>
-        <option value="担当者">担当者</option>
-        <option value="代表">代表</option>
-      </select>
+        <label for="chakuden_saki">着電先</label>
+        <select id="chakuden_saki" name="chakuden_saki">
+          <option value="" disabled selected>選択してください</option>
+          <option value="受付">受付</option>
+          <option value="担当者">担当者</option>
+          <option value="代表">代表</option>
+        </select>
+      </div>
 
       <label for="staff_name">実施者</label>
       <select id="staff_name" name="staff_name" required>
@@ -274,6 +283,20 @@
   const filenameLabel = document.getElementById("dropzone-filename");
   const submitButton = document.getElementById("submit-button");
   const form = document.getElementById("upload-form");
+
+  const reportTypeSelect = document.getElementById("report_type");
+  const shiryouSoufuFields = document.getElementById("shiryou-soufu-fields");
+  const kakudoSelect = document.getElementById("kakudo");
+  const chakudenSakiSelect = document.getElementById("chakuden_saki");
+
+  function updateFieldsForReportType() {
+    const isShiryouSoufu = reportTypeSelect.value === "資料送付";
+    shiryouSoufuFields.style.display = isShiryouSoufu ? "" : "none";
+    kakudoSelect.required = isShiryouSoufu;
+    chakudenSakiSelect.required = isShiryouSoufu;
+  }
+  reportTypeSelect.addEventListener("change", updateFieldsForReportType);
+  updateFieldsForReportType();
 
   dropzone.addEventListener("click", () => fileInput.click());
   dropzone.addEventListener("keydown", (e) => {
