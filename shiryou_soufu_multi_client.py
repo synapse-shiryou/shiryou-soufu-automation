@@ -466,13 +466,15 @@ def _process_single_job(
     staff_name: str | None = None,
     uploader: str | None = None,
 ):
+    summary_text = None
+    gemini_error = None
     try:
         summary_text = transcribe_and_summarize(file_path)
     except Exception as e:
-        logger.exception("job=%d Gemini処理失敗", job_id)
-        _update_job(job_id, "error", error_message=str(e))
-        notify_slack_failure(job_id, phone_number)
-        return
+        # Geminiの文字起こし・要約が失敗しても、電話番号キーでの行特定・確度・
+        # お名前などの他項目の書き込みは続行する(ヒアリング内容欄だけが空欄になる)。
+        logger.exception("job=%d Gemini処理失敗(他の項目の書き込みは続行します)", job_id)
+        gemini_error = str(e)
     finally:
         try:
             os.remove(file_path)
@@ -488,7 +490,7 @@ def _process_single_job(
             ref_ws = find_reference_worksheet(ws.spreadsheet)
             ref_data = lookup_reference_row(ref_ws, phone_number) if ref_ws else None
             if ref_data is None:
-                _update_job(job_id, "no_match", result_text=summary_text)
+                _update_job(job_id, "no_match", result_text=summary_text, error_message=gemini_error)
                 notify_slack_no_match(job_id, phone_number, summary_text)
                 return
             row_num = append_row_from_reference(ws, phone_col, ref_data)
@@ -497,7 +499,8 @@ def _process_single_job(
                 job_id, ws.title, ref_ws.title, row_num,
             )
 
-        write_with_retry(ws, row_num, detail_col, summary_text)
+        if summary_text:
+            write_with_retry(ws, row_num, detail_col, summary_text)
         if kakudo:
             if kakudo_col is not None:
                 write_with_retry(ws, row_num, kakudo_col, kakudo)
@@ -514,6 +517,16 @@ def _process_single_job(
     except Exception as e:
         logger.exception("job=%d シート書き込み失敗", job_id)
         _update_job(job_id, "error", error_message=str(e), result_text=summary_text)
+        notify_slack_failure(job_id, phone_number)
+        return
+
+    if gemini_error:
+        # 他項目は書き込み済みだが、ヒアリング内容(Geminiの要約)だけは手動記入が必要
+        _update_job(
+            job_id, "error",
+            error_message=f"Gemini処理失敗(電話番号キーでの他項目書き込みは完了): {gemini_error}",
+            result_text=summary_text,
+        )
         notify_slack_failure(job_id, phone_number)
         return
 
