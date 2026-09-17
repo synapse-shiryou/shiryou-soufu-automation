@@ -1,6 +1,6 @@
 # 資料送付報告 自動化
 
-営業架電の音声ファイルをアップロードすると、Gemini APIで文字起こし・要約を行い、
+営業架電の音声ファイルをアップロードすると、Groq API(Whisper文字起こし + Llama要約)で処理を行い、
 アップロード画面で指定したGoogleスプレッドシート(管理表)に自動で書き込むFastAPIアプリです。
 
 ## 構成
@@ -17,7 +17,7 @@
 
 - アップロードURLは常に **`/shiryou-soufu/upload`** の1つだけ。クライアントの事前登録は不要
 - アップロードは受付のみ同期処理し、即座にレスポンスを返す
-- Gemini処理・シート書き込みはAPScheduler製バックグラウンドワーカーが15秒間隔で処理
+- Groq処理・シート書き込みはAPScheduler製バックグラウンドワーカーが15秒間隔で処理
 - どのスプレッドシートに書き込むかは、アップロード画面で毎回貼り付けるURLだけで決まる
 
 ## アップロードフォームの入力項目
@@ -29,7 +29,7 @@
 | スプレッドシートURL | ○ | 書き込み先の管理表URL。`gid` 付きならそのタブを直接使用、無ければタブ名に「資料送付」を含むシートを自動検索する |
 | 確度 | ○ | 高 / 中 / 低 から選択。書き込み先のM列に反映される |
 | 実施者 | ○ | 架電担当者本人を `staff_members` テーブルの一覧から選択。Slack通知の実施者表示に使う |
-| 架電音声ファイル | ○ | Geminiが文字起こし・要約する音声 |
+| 架電音声ファイル | ○ | Groq(Whisper/Llama)が文字起こし・要約する音声 |
 
 列(電話番号列・詳細列)はヘッダー行の文字列から自動特定されるため、シートごとの個別設定は不要です。
 
@@ -37,12 +37,13 @@
 
 | 変数名 | 必須 | 説明 |
 |---|---|---|
-| `GEMINI_API_KEY` | ○ | Google AI Studioで発行するGemini APIキー |
+| `GROQ_API_KEY` | ○ | [Groq Console](https://console.groq.com/keys)で発行するAPIキー |
 | `DATABASE_URL` | ○ | PostgreSQL接続文字列。例: `postgresql://user:pass@host:5432/dbname`(RailwayでPostgreSQLプラグインを追加すると自動発行される) |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | ○(Railway等) | Google Sheets APIサービスアカウントの秘密鍵JSONの中身をそのまま文字列で設定(ファイルアップロードが困難な環境向け) |
 | `GOOGLE_SERVICE_ACCOUNT_FILE` | 任意 | ローカル実行時、JSONファイルのパスで認証する場合に使用(デフォルト: `service_account.json`)。`GOOGLE_SERVICE_ACCOUNT_JSON` が設定されている場合はそちらが優先される |
 | `UPLOAD_DIR` | 任意 | 音声一時保存先ディレクトリ(デフォルト: `/tmp/shiryou_soufu_uploads`) |
-| `SLACK_WORKFLOW_WEBHOOK_URL` | 任意 | 書き込み成功時に起動するSlackワークフロー(資料送付報告_v2)のWebhook URL。未設定なら通知はログ出力のみ |
+| `SLACK_WORKFLOW_WEBHOOK_URL` | 任意 | 報告種別「資料送付」時に起動するSlackワークフロー(資料送付報告_v2)のWebhook URL。未設定なら通知はログ出力のみ |
+| `SLACK_WORKFLOW_WEBHOOK_URL_APO` | 任意 | 報告種別「アポ獲得」時に起動するSlackワークフロー(アポ獲得報告_v2_Webhook)のWebhook URL。未設定なら通知はログ出力のみ |
 | `SLACK_BOT_TOKEN` | 任意 | 実施者一覧をSlackチャンネルのメンバーと毎日自動同期するためのBot Token(`channels:read`, `users:read`)。未設定なら同期をスキップし、手動登録のみで運用可能 |
 | `STAFF_SYNC_CHANNEL_ID` | 任意 | 実施者一覧の同期元とするSlackチャンネルID(デフォルト: `#13_全体連絡チャンネル` = `C0B87GX6RCG`) |
 
@@ -56,7 +57,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-export GEMINI_API_KEY="xxxx"
+export GROQ_API_KEY="xxxx"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/shiryou_soufu"
 export GOOGLE_SERVICE_ACCOUNT_FILE="service_account.json"   # またはGOOGLE_SERVICE_ACCOUNT_JSON
 

@@ -20,7 +20,7 @@
 
 必要パッケージ:
   pip install fastapi uvicorn python-multipart jinja2 sqlalchemy psycopg2-binary \
-              apscheduler google-generativeai gspread google-auth requests --break-system-packages
+              apscheduler gspread google-auth requests --break-system-packages
 
 このファイルと同じ階層に templates/upload_form.html を置いてください
 (Jinja2Templates(directory="templates") が参照します)。
@@ -38,7 +38,6 @@ import logging
 from pathlib import Path
 from datetime import datetime, date
 
-import google.generativeai as genai
 import gspread
 import requests
 from google.oauth2.service_account import Credentials
@@ -54,8 +53,9 @@ logger = logging.getLogger("shiryou_soufu_multi")
 # ------------------------------------------------------------------
 # 設定
 # ------------------------------------------------------------------
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = "gemini-3.6-flash"
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GROQ_TRANSCRIBE_MODEL = "whisper-large-v3"
+GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
 DATABASE_URL = os.environ["DATABASE_URL"]
 SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/shiryou_soufu_uploads"))
@@ -217,21 +217,35 @@ def init_db():
 # Gemini / Sheets 呼び出し
 # ------------------------------------------------------------------
 def transcribe_and_summarize(audio_path: str, prompt: str = PROMPT) -> str:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=prompt)
+    """Groq APIで音声を文字起こしし(Whisper)、続けて要約(Llama)する。"""
+    with open(audio_path, "rb") as f:
+        transcribe_resp = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            files={"file": (os.path.basename(audio_path), f)},
+            data={"model": GROQ_TRANSCRIBE_MODEL, "language": "ja"},
+            timeout=120,
+        )
+    transcribe_resp.raise_for_status()
+    transcript = transcribe_resp.json()["text"]
 
-    audio_file = genai.upload_file(path=audio_path)
-    while audio_file.state.name == "PROCESSING":
-        time.sleep(2)
-        audio_file = genai.get_file(audio_file.name)
-
-    if audio_file.state.name == "FAILED":
-        raise RuntimeError(f"Gemini file upload failed: {audio_file.name}")
-
-    response = model.generate_content(
-        [audio_file, "この音声をもとに、指示されたFMTで報告を作成してください。"]
+    chat_resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        json={
+            "model": GROQ_CHAT_MODEL,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": f"以下は営業架電音声の文字起こしです。指示されたFMTで報告を作成してください。\n\n{transcript}",
+                },
+            ],
+        },
+        timeout=60,
     )
-    return response.text.strip()
+    chat_resp.raise_for_status()
+    return chat_resp.json()["choices"][0]["message"]["content"].strip()
 
 
 _gspread_client = None
